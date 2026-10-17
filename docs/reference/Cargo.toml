@@ -1,0 +1,12 @@
+[package]
+name = "rgv-lab"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+rustgis-data = { path = "/home/sheece/Desktop/work/RustGIS/crates/data" }
+ureq = "3"
+a5 = "=1.0.0"
+
+[profile.release]
+debug = false

@@ -1,0 +1,22 @@
+[package]
+name = "fgba"
+description = "Reader and writer for FGBA (FlatGeobuf Aggregates): valid FlatGeobuf files with a curve-sorted A5 aggregate trailer, readable locally or over HTTP range requests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["gis", "geospatial", "flatgeobuf", "a5", "vector"]
+categories = ["science::geo", "parser-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+a5 = "=1.0.0"
+flatgeobuf = "6.0.1"
+thiserror = "2"
+ureq = { version = "3", optional = true }
+
+[features]
+default = []
+http = ["ureq"]
