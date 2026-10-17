@@ -333,6 +333,7 @@ fn main() {
         Some("serve") => trailer::serve(),
         Some("read-local") => trailer::read_local(),
         Some("read-http") => trailer::read_http(),
+        Some("pack-small") => trailer::pack_small(),
         other => {
             eprintln!("usage: rgv-lab gen|bench-fgb|bench-agg|pack|serve|read-local|read-http (got {other:?})");
             std::process::exit(2);

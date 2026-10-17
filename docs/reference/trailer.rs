@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::time::Instant;
 
-const MAGIC: &[u8; 8] = b"RGVAGG01";
+const MAGIC: &[u8; 8] = b"FGBAGG01";
 const SENTINEL: [u8; 4] = [0xFF; 4];
 const RGV_PATH: &str = "/tmp/rgv-lab/data/points.rgv";
 const BANDS: [i32; 5] = [2, 3, 5, 7, 9];
@@ -35,11 +35,16 @@ pub fn pack() {
     let bands: Vec<(i32, FlatIndex)> = BANDS.iter().map(|&r| (r, build_a5(&ds, r))).collect();
     let t_build = t.elapsed();
 
+    let total = ds.features.len() as u64;
     let mut out = body.clone();
     out.extend_from_slice(&SENTINEL);
     let mut metas = Vec::new();
     for (res, idx) in &bands {
         let offset = out.len() as u64;
+        out.push(1u8); // grid = A5
+        out.push(*res as u8);
+        out.extend_from_slice(&0u16.to_le_bytes()); // flags
+        out.extend_from_slice(&total.to_le_bytes());
         out.extend_from_slice(&(idx.recs.len() as u64).to_le_bytes());
         for &(cell, count) in &idx.recs {
             out.extend_from_slice(&cell.to_le_bytes());
@@ -48,18 +53,23 @@ pub fn pack() {
         metas.push(BandMeta { res: *res, offset, size: out.len() as u64 - offset });
     }
     let dir_offset = out.len() as u64;
-    out.push(1u8);
+    out.push(1u8); // directory version
     out.push(metas.len() as u8);
     for m in &metas {
-        out.push(m.res as u8);
+        out.extend_from_slice(&1u16.to_le_bytes()); // kind = aggregate band
+        out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&m.offset.to_le_bytes());
         out.extend_from_slice(&m.size.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.push(m.res as u8);
     }
     let dir_size = out.len() as u64 - dir_offset;
+    let dir_crc = crc32_ieee(&out[dir_offset as usize..]);
     let mut footer = [0u8; 32];
     footer[0..8].copy_from_slice(MAGIC);
     footer[8..16].copy_from_slice(&dir_offset.to_le_bytes());
     footer[16..24].copy_from_slice(&dir_size.to_le_bytes());
+    footer[24..28].copy_from_slice(&dir_crc.to_le_bytes());
     out.extend_from_slice(&footer);
 
     std::fs::write(RGV_PATH, &out).expect("write rgv");
@@ -192,23 +202,29 @@ fn open_trailer<S: Read + Seek>(s: &mut S) -> Vec<BandMeta> {
     let dir_size = u64::from_le_bytes(footer[16..24].try_into().unwrap()) as usize;
     let dir = read_exact_at(s, dir_offset, dir_size);
     assert_eq!(dir[0], 1, "directory version");
+    let crc = u32::from_le_bytes(footer[24..28].try_into().unwrap());
+    assert_eq!(crc, crc32_ieee(&dir), "directory crc");
     let n = dir[1] as usize;
     let mut bands = Vec::new();
     let mut p = 2;
     for _ in 0..n {
-        let res = dir[p] as i32;
-        let offset = u64::from_le_bytes(dir[p + 1..p + 9].try_into().unwrap());
-        let size = u64::from_le_bytes(dir[p + 9..p + 17].try_into().unwrap());
-        bands.push(BandMeta { res, offset, size });
-        p += 17;
+        let kind = u16::from_le_bytes(dir[p..p + 2].try_into().unwrap());
+        let offset = u64::from_le_bytes(dir[p + 4..p + 12].try_into().unwrap());
+        let size = u64::from_le_bytes(dir[p + 12..p + 20].try_into().unwrap());
+        let meta_len = u16::from_le_bytes(dir[p + 20..p + 22].try_into().unwrap()) as usize;
+        if kind == 1 && meta_len >= 1 {
+            bands.push(BandMeta { res: dir[p + 22] as i32, offset, size });
+        }
+        p += 22 + meta_len;
     }
     bands
 }
 
 fn parse_band(buf: &[u8]) -> FlatIndex {
-    let n = u64::from_le_bytes(buf[0..8].try_into().unwrap()) as usize;
+    assert_eq!(buf[0], 1, "grid A5");
+    let n = u64::from_le_bytes(buf[12..20].try_into().unwrap()) as usize;
     let mut recs = Vec::with_capacity(n);
-    let mut p = 8;
+    let mut p = 20;
     for _ in 0..n {
         let cell = u64::from_le_bytes(buf[p..p + 8].try_into().unwrap());
         let count = u32::from_le_bytes(buf[p + 8..p + 12].try_into().unwrap());
@@ -328,5 +344,82 @@ fn handle(mut s: std::net::TcpStream) {
         let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n\r\n", full.len());
         let _ = s.write_all(head.as_bytes());
         let _ = s.write_all(&full);
+    }
+}
+
+/// Small deterministic test vector for the spec: 12 known points, one res-2 band.
+/// Final v1 format: self-describing band sections, kind-tagged directory, CRC32.
+fn crc32_ieee(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+pub fn pack_small() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    let pts: [(f64, f64); 12] = [
+        (-0.12, 51.50), (-0.09, 51.51), (-0.14, 51.49), (-0.11, 51.52), // London
+        (2.33, 48.86), (2.36, 48.84), (2.34, 48.87), (2.37, 48.85),     // Paris
+        (-74.00, 40.71), (-73.97, 40.73), (-74.02, 40.70), (-73.98, 40.72), // NYC
+    ];
+    let mut ds = Dataset::new("cities", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    for (i, &(lon, lat)) in pts.iter().enumerate() {
+        ds.push_next(Some(Geometry::Point(Coord { x: lon, y: lat })), vec![Value::Text(format!("city{}", i + 1))]);
+    }
+    let body = source::fgb::write(&ds).expect("fgb");
+    let idx = build_a5(&ds, 2);
+    let total = ds.features.len() as u64;
+
+    let mut out = body.clone();
+    out.extend_from_slice(&SENTINEL);
+    // --- band section: self-describing header + records ---
+    let band_off = out.len() as u64;
+    out.push(1u8); // grid = 1 (A5)
+    out.push(2u8); // res = 2
+    out.extend_from_slice(&0u16.to_le_bytes()); // band flags = 0 (count only)
+    out.extend_from_slice(&total.to_le_bytes());
+    out.extend_from_slice(&(idx.recs.len() as u64).to_le_bytes());
+    for &(cell, count) in &idx.recs {
+        out.extend_from_slice(&cell.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+    }
+    let band_size = out.len() as u64 - band_off;
+    // --- directory: kind-tagged section table ---
+    let dir_offset = out.len() as u64;
+    out.push(1u8); // directory version
+    out.push(1u8); // n_sections
+    out.extend_from_slice(&1u16.to_le_bytes()); // kind = 1 (aggregate band)
+    out.extend_from_slice(&0u16.to_le_bytes()); // flags
+    out.extend_from_slice(&band_off.to_le_bytes());
+    out.extend_from_slice(&band_size.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // meta_len = 1
+    out.push(2u8); // meta = [res]
+    let dir_size = out.len() as u64 - dir_offset;
+    let dir_crc = crc32_ieee(&out[dir_offset as usize..]);
+    let mut footer = [0u8; 32];
+    footer[0..8].copy_from_slice(MAGIC);
+    footer[8..16].copy_from_slice(&dir_offset.to_le_bytes());
+    footer[16..24].copy_from_slice(&dir_size.to_le_bytes());
+    footer[24..28].copy_from_slice(&dir_crc.to_le_bytes());
+    out.extend_from_slice(&footer);
+
+    std::fs::write("/tmp/rgv-lab/data/small.a.fgb", &out).expect("write");
+    println!("body {} bytes ({} features), trailer+dir+footer {} bytes, total {}",
+        body.len(), total, out.len() - body.len(), out.len());
+    println!("band res2: {} occupied cells", idx.recs.len());
+    for &(c, n) in &idx.recs {
+        let ll = a5::cell_to_lonlat(c).expect("center");
+        println!("  cell {:016x} count {} (center lon {:.1} lat {:.1})", c, n, ll.longitude(), ll.latitude());
+    }
+    println!("dir crc32: {:08x}", dir_crc);
+    println!("--- hex: sentinel..EOF (offset {}) ---", body.len());
+    for (row, chunk) in out[body.len()..].chunks(16).enumerate() {
+        let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
+        println!("{:08x}  {}", body.len() + row * 16, hex.join(" "));
     }
 }
