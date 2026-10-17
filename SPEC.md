@@ -117,7 +117,7 @@ sections whose kind they do not recognize, and MUST NOT fail on them.
 | n_sections | u8 | number of entries |
 | **entry** × n_sections | | |
 | — kind | u16 | section type, registry below |
-| — flags | u16 | reserved, `0` |
+| — flags | u16 | reserved; writers MUST emit `0`, readers MUST ignore the value |
 | — offset | u64 | absolute byte offset of the section |
 | — size | u64 | byte size of the section |
 | — meta_len | u16 | byte length of `meta` |
@@ -127,7 +127,7 @@ Kind registry:
 
 | kind | section | meta |
 |---|---|---|
-| 1 | aggregate band (§6) | `[u8 res]` — the band's A5 resolution |
+| 1 | aggregate band (§6) | `[u8 res]` — the band's A5 resolution; a mismatch with the band section's own `res` field makes the trailer invalid (§10.2) |
 | 2–0x7FFF | reserved | — |
 | 0x8000–0xFFFF | vendor/private extensions | — |
 
@@ -183,7 +183,7 @@ The last 32 bytes of the file:
 | 8–16 | directory offset (u64) |
 | 16–24 | directory size (u64) |
 | 24–28 | CRC-32 (IEEE 802.3, poly `0xEDB88320`, as in PNG/zip) of the directory bytes |
-| 28–32 | reserved, `0` |
+| 28–32 | reserved; writers MUST emit `0`, readers MUST ignore the value |
 
 A reader range-reads the last 32 bytes once: magic match → FGBA, fetch the
 directory (and verify CRC); no match → plain FGB. This is the only mandatory
@@ -203,7 +203,10 @@ Producers MUST:
 3. Choose the **base resolution**: the smallest `res ≥ 2` with
    `a5.get_num_cells(res) ≥ 4 × feature_count`, capped at 16.
 4. Write bands at `{base, base−2, base−4, … }` while the resolution stays
-   `≥ 2`, at most 6 bands, ascending by resolution.
+   `≥ 2`, at most 6 bands, ascending by resolution. (For small datasets the
+   ladder may not reach res 2 — e.g. `base = 3` yields the single band
+   `{3}`. Renderers drawing a view coarser than the coarsest available band
+   simply use that coarsest band; the cells render small but correct.)
 5. Sort each band's records by ascending cell ID. Within a record set, bytes
    MUST be deterministic: identical input and options MUST produce
    byte-identical files.
@@ -250,6 +253,11 @@ then decode. Chunk caching makes warm views free.
 
 A renderer showing aggregates SHOULD:
 
+0. Clamp viewport latitudes to the Web Mercator range (±85.0511°) before
+   computing coverings: an A5 covering of a ring touching ±90° degenerates
+   (the polar quintants are partially omitted). Whole-world queries use
+   `[-180, -85.0511, 180, 85.0511]`.
+
 1. Map the viewport width to a band resolution: the coarsest available band
    whose average cell edge (`a5.cell_edge_length_avg(res)`) covers at least
    ~48 px of the view.
@@ -280,7 +288,9 @@ the sentinel ⚠️ (an upstream `featuresCount` fix is the remedy).
 
 A reader that finds a bad footer CRC, a malformed directory, or an invalid
 band MUST fall back to reading the body as plain FGB and SHOULD surface a
-warning. The body is never hostage to the trailer.
+warning. The body is never hostage to the trailer. An implementation MAY
+surface the trailer failure as an error to *its* caller instead of silently
+falling back, provided the body remains readable through the same handle.
 
 ### 10.3 Re-export caveat
 
