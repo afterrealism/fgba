@@ -13,6 +13,12 @@
 //! read; aggregate queries then read whole band sections and binary-search
 //! them, never touching feature bytes.
 //!
+//! Reading is transport-agnostic: local files and any `Read + Seek` source
+//! work out of the box, the `http` feature adds
+//! [`HttpRangeReader`](http::HttpRangeReader) for HTTP range requests
+//! (SPEC §9.2), and [`SliceReader`] adapts asynchronously fetched bytes for
+//! non-blocking environments such as wasm (SPEC §9.3).
+//!
 //! # Example
 //!
 //! Build a tiny FlatGeobuf in memory, append the aggregate trailer, and run
@@ -68,11 +74,17 @@
 pub mod band;
 pub mod error;
 pub mod format;
+#[cfg(feature = "http")]
+pub mod http;
 pub mod read;
+pub mod slice;
 pub mod write;
 
 pub use band::{ladder_resolution, AggBand, BandHeader};
 pub use error::{Error, Result};
 pub use format::{Directory, Footer, SectionEntry};
+#[cfg(feature = "http")]
+pub use http::HttpRangeReader;
 pub use read::{BandMeta, BandStats, Reader};
+pub use slice::SliceReader;
 pub use write::{build, trailer_for, BuildReport};

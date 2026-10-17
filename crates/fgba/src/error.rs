@@ -21,6 +21,12 @@ pub enum Error {
     /// The A5 grid library rejected a coordinate, cell, or covering.
     #[error("a5 grid error: {0}")]
     A5(String),
+    /// The HTTP layer failed: the server does not do range requests, a
+    /// request or redirect was refused (SPEC §9.2, §12), or the transfer
+    /// itself failed.
+    #[cfg(feature = "http")]
+    #[error("http error: {0}")]
+    Http(String),
 }
 
 /// Convenience alias for FGBA results.
