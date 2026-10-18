@@ -177,10 +177,7 @@ pub(crate) fn build_to_file_at(
 
 /// Print the build report lines shared by `build` and `convert`.
 pub(crate) fn print_report(report: &fgba::BuildReport, total: u64, wall: Duration) {
-    println!(
-        "  features: {} ({} skipped)",
-        report.features, report.skipped
-    );
+    println!("  features: {} ({} skipped)", report.features, report.skipped);
     println!(
         "  bands: {}",
         report
@@ -216,8 +213,8 @@ pub(crate) fn strip_existing_trailer(bytes: Vec<u8>) -> Result<(Vec<u8>, bool), 
     let mut bytes = cursor.into_inner();
     match body_len {
         Some(len) => {
-            let len =
-                usize::try_from(len).map_err(|_| "file too large for this platform".to_string())?;
+            let len = usize::try_from(len)
+                .map_err(|_| "file too large for this platform".to_string())?;
             bytes.truncate(len);
             Ok((bytes, true))
         }
@@ -252,7 +249,8 @@ fn cmd_info(src: &Source) -> Result<(), String> {
                 Ok(())
             }
             Err(FgbaError::NotFgba) => {
-                let http = fgba::HttpRangeReader::open(url).map_err(|e| format!("{url}: {e}"))?;
+                let http = fgba::HttpRangeReader::open(url)
+                    .map_err(|e| format!("{url}: {e}"))?;
                 let fgb = FgbReader::open(http)
                     .map_err(|e| format!("{url}: cannot read FlatGeobuf header: {e}"))?;
                 info_plain(fgb, &label);
@@ -320,9 +318,9 @@ pub(crate) struct HeaderInfo {
 /// Extract the header facts from an open FlatGeobuf reader.
 pub(crate) fn header_info<R: Read>(fgb: FgbReader<R>) -> HeaderInfo {
     let h = fgb.header();
-    let envelope = h
-        .envelope()
-        .and_then(|v| (v.len() == 4).then(|| [v.get(0), v.get(1), v.get(2), v.get(3)]));
+    let envelope = h.envelope().and_then(|v| {
+        (v.len() == 4).then(|| [v.get(0), v.get(1), v.get(2), v.get(3)])
+    });
     HeaderInfo {
         features: h.features_count(),
         geometry: format!("{:?}", h.geometry_type()),
@@ -410,11 +408,15 @@ fn cmd_verify(input: &Path) -> Result<(), String> {
     let body_features = match std::fs::File::open(input)
         .map(BufReader::new)
         .map_err(|e| e.to_string())
-        .and_then(|f| FgbReader::open(f).map_err(|e| format!("cannot read FlatGeobuf body: {e}")))
-    {
+        .and_then(|f| {
+            FgbReader::open(f).map_err(|e| format!("cannot read FlatGeobuf body: {e}"))
+        }) {
         Ok(fgb) => {
             let h = header_info(fgb);
-            println!("  body: {} features, {} — OK", h.features, h.geometry);
+            println!(
+                "  body: {} features, {} — OK",
+                h.features, h.geometry
+            );
             Some(h.features)
         }
         Err(e) => {

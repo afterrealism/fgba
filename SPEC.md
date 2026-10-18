@@ -260,7 +260,9 @@ A renderer showing aggregates SHOULD:
 
 1. Map the viewport width to a band resolution: the coarsest available band
    whose average cell edge (`a5.cell_edge_length_avg(res)`) covers at least
-   ~48 px of the view.
+   ~48 px of the view. (The reference ladder spans res 2–15 so that files
+   with a base resolution up to 16 are served at every zoom; a view finer
+   than the deepest band always reads the body.)
 2. Estimate real matches: sum the counts of the deepest band's cells
    covering the viewport (use *overlapping* containment — center-containment
    misses boundary cells at fine zooms).

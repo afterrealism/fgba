@@ -239,8 +239,8 @@ impl Xy for shapefile::PointZ {
 fn read_shp(path: &Path) -> Result<Geoms, String> {
     let label = path.display().to_string();
     // ShapeReader reads geometry only; a missing .dbf sidecar is fine.
-    let mut reader =
-        shapefile::ShapeReader::from_path(path).map_err(|e| format!("{label}: {e}"))?;
+    let mut reader = shapefile::ShapeReader::from_path(path)
+        .map_err(|e| format!("{label}: {e}"))?;
     let mut geoms = Vec::new();
     let mut skipped = 0usize;
     for (i, shape) in reader.iter_shapes().enumerate() {
@@ -329,7 +329,11 @@ fn polygon<P: Xy>(rings: &[shapefile::PolygonRing<P>]) -> Option<Geometry<f64>> 
                 let target = hole
                     .0
                     .first()
-                    .and_then(|c| polys.iter().position(|p| point_in_ring(*c, p.exterior())))
+                    .and_then(|c| {
+                        polys
+                            .iter()
+                            .position(|p| point_in_ring(*c, p.exterior()))
+                    })
                     .unwrap_or(0);
                 if let Some(poly) = polys.get_mut(target) {
                     poly.interiors_push(hole);

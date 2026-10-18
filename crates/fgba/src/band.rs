@@ -205,8 +205,10 @@ fn validate_records(res: u8, cells: &[(u64, u32)]) -> Result<()> {
 ///
 /// The mapping picks the coarsest band whose cells still cover roughly 48 px
 /// of a typical view: `>60°` → res 2, `>16°` → res 3, `>4°` → res 5,
-/// `>0.5°` → res 7, otherwise res 9. Non-finite and negative widths map to
-/// the deepest band (9), the conservative choice.
+/// `>0.5°` → res 7, `>0.125°` → res 9, `>0.03°` → res 11, `>0.008°` → res 13,
+/// otherwise res 15. Non-finite and negative widths map to the deepest band
+/// (15), the conservative choice. The ladder continues to res 15 because the
+/// build protocol (SPEC §8) permits a base resolution up to 16.
 ///
 /// This is informative guidance, not a format rule; applications may pick
 /// bands any way they like, and above the base resolution they should read
@@ -220,8 +222,14 @@ pub fn ladder_resolution(view_width_deg: f64) -> u8 {
         5
     } else if view_width_deg > 0.5 {
         7
-    } else {
+    } else if view_width_deg > 0.125 {
         9
+    } else if view_width_deg > 0.03 {
+        11
+    } else if view_width_deg > 0.008 {
+        13
+    } else {
+        15
     }
 }
 
@@ -330,10 +338,12 @@ mod tests {
         assert_eq!(ladder_resolution(4.0), 7);
         assert_eq!(ladder_resolution(1.0), 7);
         assert_eq!(ladder_resolution(0.5), 9);
-        assert_eq!(ladder_resolution(0.125), 9);
-        assert_eq!(ladder_resolution(0.0), 9);
-        assert_eq!(ladder_resolution(-1.0), 9);
-        assert_eq!(ladder_resolution(f64::NAN), 9);
+        assert_eq!(ladder_resolution(0.125), 11);
+        assert_eq!(ladder_resolution(0.03), 13);
+        assert_eq!(ladder_resolution(0.008), 15);
+        assert_eq!(ladder_resolution(0.0), 15);
+        assert_eq!(ladder_resolution(-1.0), 15);
+        assert_eq!(ladder_resolution(f64::NAN), 15);
         assert_eq!(ladder_resolution(f64::INFINITY), 2);
     }
 }

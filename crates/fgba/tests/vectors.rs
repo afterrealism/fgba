@@ -339,5 +339,5 @@ fn ladder_spot_checks() {
     assert_eq!(ladder_resolution(32.0), 3);
     assert_eq!(ladder_resolution(8.0), 5);
     assert_eq!(ladder_resolution(1.0), 7);
-    assert_eq!(ladder_resolution(0.125), 9);
+    assert_eq!(ladder_resolution(0.2), 9);
 }
