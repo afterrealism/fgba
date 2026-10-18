@@ -3,10 +3,22 @@ name = "fgba"
 description = "Reader and writer for FGBA (FlatGeobuf Aggregates): valid FlatGeobuf files with a curve-sorted A5 aggregate trailer, readable locally or over HTTP range requests"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "README.md"
 keywords = ["gis", "geospatial", "flatgeobuf", "a5", "vector"]
 categories = ["science::geo", "parser-implementations"]
+# examples/wasm is a browser demo (HTML/JS), not a Cargo example target;
+# keep it out of the published .crate package.
+exclude = ["examples/wasm/"]
+
+# docs.rs: build the optional `http` API docs too. Default targets only
+# (x86_64-unknown-linux-gnu hosts the build); rustdoc-args declares the docsrs
+# cfg so doc(cfg) feature badges work when added.
+[package.metadata.docs.rs]
+features = ["http"]
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true

@@ -116,7 +116,7 @@ impl AggBand {
         // The record region must be exactly num_cells records long; this also
         // bounds num_cells by the real byte length before any allocation.
         let record_bytes = bytes.len() - BAND_HEADER_SIZE;
-        if !record_bytes.is_multiple_of(BAND_RECORD_SIZE) {
+        if record_bytes % BAND_RECORD_SIZE != 0 {
             return Err(Error::Format(format!(
                 "band record region {record_bytes} bytes is not a multiple of {BAND_RECORD_SIZE}"
             )));

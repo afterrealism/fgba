@@ -7,10 +7,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 /// The normative vector file (SPEC Appendix A).
 fn vector_bytes() -> std::io::Result<Vec<u8>> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../testdata/cities_12.a.fgb"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/cities_12.a.fgb");
     std::fs::read(path)
 }
 

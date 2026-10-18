@@ -14,10 +14,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 const CITIES_GEOJSON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/cities.geojson");
 
 /// The normative FGBA vector.
-const CITIES_VECTOR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../testdata/cities_12.a.fgb"
-);
+const CITIES_VECTOR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/cities_12.a.fgb");
 
 fn fgba(args: &[&str]) -> std::io::Result<Output> {
     Command::new(env!("CARGO_BIN_EXE_fgba")).args(args).output()

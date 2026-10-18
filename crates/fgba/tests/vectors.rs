@@ -1,5 +1,6 @@
 //! Integration tests against the normative test vector (SPEC.md Appendix A,
-//! `testdata/cities_12.a.fgb`) and round-trips through `build` + `Reader`.
+//! `tests/data/cities_12.a.fgb`, synced from `testdata/` by xtask) and
+//! round-trips through `build` + `Reader`.
 
 use fgba::band::AggBand;
 use fgba::error::Error;
@@ -55,10 +56,7 @@ fn fgb_body() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 /// The normative vector file.
 fn vector_bytes() -> std::io::Result<Vec<u8>> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../testdata/cities_12.a.fgb"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/cities_12.a.fgb");
     std::fs::read(path)
 }
 

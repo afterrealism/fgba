@@ -70,6 +70,37 @@ fn vector_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../testdata/cities_12.a.fgb")
 }
 
+/// Per-crate copies of the normative vector: tests inside a packaged .crate
+/// cannot reach `../../testdata`, so each published crate carries its own.
+fn crate_copies() -> [PathBuf; 2] {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    [
+        root.join("crates/fgba/tests/data/cities_12.a.fgb"),
+        root.join("crates/fgba-cli/tests/data/cities_12.a.fgb"),
+    ]
+}
+
+/// Keep the per-crate copies byte-identical to the canonical vector: refresh
+/// them when `write`, otherwise fail on drift.
+fn sync_copies(canonical: &[u8], write: bool) -> Result<(), Box<dyn Error>> {
+    for path in crate_copies() {
+        if std::fs::read(&path).ok().as_deref() == Some(canonical) {
+            continue;
+        }
+        if write {
+            std::fs::write(&path, canonical)?;
+            println!("synced {}", path.display());
+        } else {
+            return Err(format!(
+                "{} differs from testdata/cities_12.a.fgb — run `cargo xtask gen-testdata --write`",
+                path.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 /// Write the 12 points as a FlatGeobuf body in memory (no properties: the
 /// committed vector additionally carries a `name` column, so its body is not
 /// reproduced from coordinates alone — the trailer comparison is structural).
@@ -109,6 +140,7 @@ fn gen_testdata(write: bool) -> Result<(), Box<dyn Error>> {
                     "unchanged: {} matches the deterministic build",
                     path.display()
                 );
+                sync_copies(&committed, write)?;
                 return Ok(());
             }
             if !write {
@@ -118,6 +150,7 @@ fn gen_testdata(write: bool) -> Result<(), Box<dyn Error>> {
                      match. Leaving the normative vector untouched — pass --write to replace it\n\
                      (verify-vectors' Appendix A numbers are tied to the committed body)."
                 );
+                sync_copies(&committed, false)?;
                 return Ok(());
             }
         }
@@ -129,6 +162,7 @@ fn gen_testdata(write: bool) -> Result<(), Box<dyn Error>> {
     std::fs::write(&tmp, &file)?;
     std::fs::rename(&tmp, &path)?;
     println!("wrote {} ({} B)", path.display(), file.len());
+    sync_copies(&file, true)?;
     Ok(())
 }
 
@@ -191,6 +225,7 @@ fn verify_vectors() -> Result<(), Box<dyn Error>> {
     let path = vector_path();
     let bytes = std::fs::read(&path)?;
     println!("verify {} ({} B)", path.display(), bytes.len());
+    sync_copies(&bytes, false)?;
 
     check(
         bytes.len() == 1777,
