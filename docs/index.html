@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="FGBA — FlatGeobuf Aggregates: a cloud-optimized vector format with full-fidelity FlatGeobuf features plus precomputed A5 aggregate cells, streamable over plain HTTP range requests.">
+<title>FGBA — FlatGeobuf Aggregates</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="index.html" aria-current="page">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="index.html" aria-current="page">Overview</a>
+      <a href="spec.html">Specification</a>
+      <a href="guide/quickstart.html">Guide</a>
+      <a href="examples.html">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <h1>FGBA<span class="sub">FlatGeobuf Aggregates</span></h1>
+    <p class="tagline">A cloud-optimized vector format: full-fidelity
+    <a href="https://flatgeobuf.org">FlatGeobuf</a> features plus precomputed
+    <a href="https://a5geo.org">A5</a> aggregate cells, streamable over plain
+    HTTP range requests.</p>
+    <p>An FGBA file <em>is</em> a FlatGeobuf file — every existing FGB reader
+    (GDAL, QGIS, the JS and Rust libraries) reads all features from it
+    unchanged. After the feature data, a small trailer carries counted,
+    equal-area A5 pentagon cells at several resolutions. Readers that know the
+    trailer get instant low-zoom overviews and count analytics, locally or
+    straight off S3/R2/static hosting; readers that don't never notice it.</p>
+    <pre><code>┌─────────────────────────────────────────────┐
+│ plain FlatGeobuf (full resolution features) │ <span class="c">← readable by any FGB reader</span>
+├─────────────────────────────────────────────┤
+│ aggregate bands (cell, count) by resolution │ <span class="c">← FGBA-aware readers get</span>
+│ directory · footer (32B discovery at EOF)   │ <span class="c">  fast at every zoom</span>
+└─────────────────────────────────────────────┘</code></pre>
+    <p class="cta">
+      <a class="btn btn-primary" href="spec.html">Read the specification</a>
+      <a class="btn btn-ghost" href="guide/quickstart.html">Quickstart</a>
+    </p>
+  </section>
+
+  <section aria-labelledby="quickstart">
+    <h2 id="quickstart">Quickstart</h2>
+    <pre><code><span class="c"># install the CLI</span>
+cargo install fgba-cli
+
+<span class="c"># convert a dataset (GeoJSON / CSV / Shapefile / FGB) and inspect it</span>
+fgba convert buildings.geojson -o buildings.a.fgb
+fgba info buildings.a.fgb
+
+<span class="c"># serve it over loopback HTTP with range requests and open the viewer demo</span>
+fgba serve buildings.a.fgb</code></pre>
+    <pre><code><span class="c">// Cargo.toml: fgba = { version = "0.1", features = ["http"] }</span>
+<span class="c">// Count analytics straight off static hosting — a few hundred bytes:</span>
+let mut r = fgba::Reader::open_url("https://example.com/buildings.a.fgb")?;
+let cells = r.query([-0.5, 51.3, 0.3, 51.7], 7)?;
+let total = r.stats([-180.0, -85.0, 180.0, 85.0], 2)?.total;</code></pre>
+  </section>
+
+  <div class="blocks">
+
+    <section class="card" aria-labelledby="the-format">
+      <h2 id="the-format">The Format</h2>
+      <p>A binary extension of FlatGeobuf: a valid FGB body, then a trailer of
+      aggregate bands — per-resolution arrays of <code>(A5 cell, count)</code>
+      records, curve-sorted so a viewport covering is a few contiguous runs.
+      A 32-byte footer at end-of-file discovers a CRC-verified, kind-tagged
+      directory; unknown sections are skipped, never failed on. Deterministic,
+      write-once, and documented to the byte.</p>
+      <p><a href="spec.html">Specification, Draft v1 →</a></p>
+    </section>
+
+    <section class="card" aria-labelledby="library-tools">
+      <h2 id="library-tools">Library &amp; Tools</h2>
+      <p>The reference implementation is a Rust library plus a command-line
+      tool — version 0.1 implementing the <strong>draft v1</strong> spec.</p>
+      <pre><code>cargo add fgba
+cargo install fgba-cli</code></pre>
+      <p><a href="https://docs.rs/fgba">docs.rs/fgba</a> ·
+      <a href="https://crates.io/crates/fgba">crates.io/crates/fgba</a> ·
+      <a href="https://crates.io/crates/fgba-cli">crates.io/crates/fgba-cli</a></p>
+      <p>The core crate builds for <code>wasm32-unknown-unknown</code>: in the
+      browser, fetch byte ranges asynchronously and decode with
+      <code>SliceReader</code> — two phases, no blocking
+      (<a href="guide/rust.html">guide</a>,
+      <a href="examples.html">browser demo</a>).</p>
+    </section>
+
+    <section class="card" aria-labelledby="the-numbers">
+      <h2 id="the-numbers">The Numbers</h2>
+      <p>Measured on a synthetic 1M-point dataset (117 MiB body), release
+      build:</p>
+      <table class="numbers">
+        <tbody>
+          <tr><td>build: FGB encode + 5 bands</td><td>2.5 s + 1.1 s</td></tr>
+          <tr><td>trailer size</td><td>2.43 MiB (~2%)</td></tr>
+          <tr><td>aggregate query per viewport</td><td>2–91 µs</td></tr>
+          <tr><td>HTTP: open (probe+footer+dir)</td><td>3 requests, 120 B</td></tr>
+          <tr><td>HTTP: first view per band</td><td>1 request</td></tr>
+          <tr><td>HTTP: cached viewport</td><td>0 requests</td></tr>
+        </tbody>
+      </table>
+      <p class="fine">Reference machine: a 2026 laptop, 2026-10-18; HTTP over
+      loopback. Methodology and caveats in
+      <a href="spec.html#appendix-b">SPEC Appendix B</a>.</p>
+    </section>
+
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

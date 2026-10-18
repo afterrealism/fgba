@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Hosting FGBA files: HTTP range-request requirements, the 206 probe, CORS configuration for S3, R2 and nginx, CDN preflight caching.">
+<title>Hosting — FGBA Guide</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="../index.html">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="../index.html">Overview</a>
+      <a href="../spec.html">Specification</a>
+      <a href="quickstart.html" aria-current="page">Guide</a>
+      <a href="../examples.html">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="guide-layout">
+
+  <aside class="guide-nav" aria-label="Guide">
+    <p class="nav-title">Guide</p>
+    <ul>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="rust.html">Reading from Rust</a></li>
+      <li><a href="hosting.html" aria-current="page">Hosting (S3 / R2 / nginx)</a></li>
+      <li><a href="converting.html">Converting datasets</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+    </ul>
+  </aside>
+
+  <main class="guide-body">
+
+<h1>Hosting FGBA files</h1>
+
+<p class="lede">FGBA streams off plain static hosting — no server-side code.
+The host must support HTTP range requests; if a browser viewer lives on a
+different origin, it must also answer a CORS preflight. This page mirrors
+<a href="../spec.html#http">SPEC §9.2</a> and flatgeobuf.org's CDN notes.</p>
+
+<h2 id="ranges">The one hard requirement: 206<a class="self" href="#ranges" aria-label="link to this section">§</a></h2>
+
+<p>Readers open a file with a one-byte probe, <code>Range: bytes=0-0</code>.
+The server MUST answer <code>206 Partial Content</code> with a
+<code>Content-Range</code> header — that header is also how the reader learns
+the file length. A <code>200</code> answer means the host does not do range
+requests, and the reader fails with a message naming range support. S3, R2,
+nginx, and most static hosts qualify.</p>
+
+<p>Check a host by hand:</p>
+
+<pre><code>$ curl -o /dev/null -D - -H 'Range: bytes=0-0' \
+    https://example.com/data/buildings.a.fgb
+HTTP/2 206
+content-range: bytes 0-0/128456789
+accept-ranges: bytes
+content-length: 1</code></pre>
+
+<p>Range support lets a reader open a file of any size with 3 requests
+(probe + 32-byte footer + CRC-verified directory) and then fetch each
+aggregate band once — see the <a href="../index.html#the-numbers">measured
+numbers</a>.</p>
+
+<h2 id="cors">Cross-origin reads from browsers: CORS<a class="self" href="#cors" aria-label="link to this section">§</a></h2>
+
+<p>Native readers (the Rust library, GDAL, QGIS) do not care about CORS.
+Browsers do, when the page and the data sit on different origins. Three
+things must line up:</p>
+
+<ol>
+  <li><strong><code>Access-Control-Allow-Origin</code></strong> on the
+  responses — your viewer's origin, or <code>*</code> for public data.</li>
+  <li><strong>The <code>Range</code> preflight.</strong> <code>Range</code> is
+  not a CORS-safelisted request header, so the browser sends an
+  <code>OPTIONS</code> preflight before the first range request. The host must
+  answer it with <code>Access-Control-Allow-Headers</code> including
+  <code>Range</code>. Send <code>Access-Control-Max-Age</code> (e.g.
+  <code>86400</code>) so browsers cache the preflight — without caching,
+  every range request pays a second round trip.</li>
+  <li><strong><code>Access-Control-Expose-Headers</code></strong> including
+  <code>Content-Range</code> (and <code>Accept-Ranges</code>,
+  <code>Content-Length</code>, <code>ETag</code> are useful too). Without it,
+  JavaScript can read the 206 body but <em>not</em> the
+  <code>Content-Range</code> header, and FGBA readers cannot learn the file
+  length.</li>
+</ol>
+
+<p>Test the preflight by hand:</p>
+
+<pre><code>$ curl -X OPTIONS -D - -o /dev/null \
+    -H 'Origin: https://viewer.example' \
+    -H 'Access-Control-Request-Method: GET' \
+    -H 'Access-Control-Request-Headers: range' \
+    https://example.com/data/buildings.a.fgb
+HTTP/2 204
+access-control-allow-origin: https://viewer.example
+access-control-allow-headers: range
+access-control-max-age: 86400</code></pre>
+
+<h2 id="s3">S3<a class="self" href="#s3" aria-label="link to this section">§</a></h2>
+
+<p>S3 answers range requests natively. Attach a CORS configuration to the
+bucket (console → Permissions → CORS, or <code>PutBucketCors</code>):</p>
+
+<pre><code>[
+  {
+    "AllowedOrigins": ["https://viewer.example"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["range"],
+    "ExposeHeaders": ["content-range", "accept-ranges", "content-length", "etag"],
+    "MaxAgeSeconds": 86400
+  }
+]</code></pre>
+
+<p>For public, cross-origin-readable data, <code>"AllowedOrigins":
+["*"]</code> works.</p>
+
+<h2 id="r2">Cloudflare R2<a class="self" href="#r2" aria-label="link to this section">§</a></h2>
+
+<p>R2 answers range requests and speaks the same S3-shaped CORS policy
+(dashboard → bucket → Settings → CORS Policy, or the S3 API):</p>
+
+<pre><code>[
+  {
+    "AllowedOrigins": ["https://viewer.example"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["range"],
+    "ExposeHeaders": ["content-range", "accept-ranges", "content-length", "etag"],
+    "MaxAgeSeconds": 86400
+  }
+]</code></pre>
+
+<h2 id="nginx">nginx<a class="self" href="#nginx" aria-label="link to this section">§</a></h2>
+
+<p>nginx serves byte ranges for static files by default; add the CORS headers
+and short-circuit the preflight:</p>
+
+<pre><code>location /data/ {
+    add_header Access-Control-Allow-Origin  "$http_origin" always;
+    add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "Range" always;
+    add_header Access-Control-Expose-Headers \
+        "Content-Range, Accept-Ranges, Content-Length, ETag" always;
+    add_header Access-Control-Max-Age 86400 always;
+    if ($request_method = OPTIONS) { return 204; }
+}</code></pre>
+
+<p>(For world-public data, use <code>*</code> instead of
+<code>$http_origin</code> and drop the <code>if</code>'s special status —
+<code>add_header ... always</code> already covers preflights.)</p>
+
+<h2 id="cdn">In front of a CDN<a class="self" href="#cdn" aria-label="link to this section">§</a></h2>
+
+<p>flatgeobuf.org's <em>Optimizing Remotely Hosted FlatGeobufs</em> notes
+apply to FGBA unchanged: range reading makes many small requests, so
+round-trip latency — not throughput — dominates, and a caching CDN close to
+the viewer helps. One gotcha named there: popular CDNs such as CloudFront
+support range requests but <strong>do not cache the preflight
+<code>OPTIONS</code> responses by default</strong> — enable OPTIONS caching
+(the response headers are what vary), or every range fetch pays the preflight
+round trip. See
+<a href="https://flatgeobuf.org">flatgeobuf.org</a> and the
+<a href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/header-caching.html#header-caching-web-cors">CloudFront
+docs on CORS header caching</a>.</p>
+
+<h2 id="caching">Cache forever, rebuild to change<a class="self" href="#caching" aria-label="link to this section">§</a></h2>
+
+<p>FGBA files are write-once and deterministic: identical input and options
+produce byte-identical files, and updates are rebuilds, not edits
+(<a href="../spec.html#write-protocol">SPEC §8</a>). So publish under a new
+key/name and set a long cache policy on the data:</p>
+
+<pre><code>Cache-Control: public, max-age=31536000, immutable</code></pre>
+
+<p>A reader that falls back or a file that fails verification is almost always
+a hosting issue, not a format issue — run the <a href="#ranges">206
+probe</a> and the <a href="#cors">preflight check</a> first. One known
+non-hosting caveat: re-saving through another tool (<code>ogr2ogr</code>)
+drops the trailer — distribute the file as built
+(<a href="../spec.html#re-export">SPEC §10.3</a>).</p>
+
+  </main>
+</div>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

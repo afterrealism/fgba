@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="FGBA examples: read/write round trip, HTTP range reading, and the dependency-free browser canvas demo.">
+<title>Examples — FGBA</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="index.html">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="index.html">Overview</a>
+      <a href="spec.html">Specification</a>
+      <a href="guide/quickstart.html">Guide</a>
+      <a href="examples.html" aria-current="page">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="prose">
+
+<h1>Examples</h1>
+
+<p class="lede">Three runnable examples ship in the repository, from smallest
+to most end-to-end. All of them run against the committed 12-feature test
+vector (<code>testdata/cities_12.a.fgb</code>, the normative vector of
+<a href="spec.html#appendix-a">SPEC Appendix A</a>).</p>
+
+<h2 id="read_write">read_write — library round trip<a class="self" href="#read_write" aria-label="link to this section">§</a></h2>
+
+<p><a href="https://github.com/afterrealism/fgba/blob/main/crates/fgba/examples/read_write.rs"><code>crates/fgba/examples/read_write.rs</code></a>
+builds a small FlatGeobuf body in memory (the 12 cities of the test vector),
+appends the aggregate trailer with <code>fgba::build</code>, writes the file
+to a temporary directory, reopens it with <code>Reader::open_path</code>, and
+answers count queries from the trailer alone.</p>
+
+<pre><code>$ cargo run -p fgba --example read_write
+body: 12 cities, 1528 bytes of FlatGeobuf
+trailer: 105 bytes, band(s) at A5 resolution 2
+wrote /tmp/cities.a.fgb (1633 bytes) and reopened it
+body length: 1528 bytes (the trailer starts there)
+  band res 2: 2 cells, 12 features, 44 bytes at offset 1532
+stats over Europe [-11, 35, 31, 71] @ res 2: 1 cell(s), ~8 features
+query over New York [-75, 39, -72, 42] @ res 2:
+  cell 0x2680000000000000: 4 features
+stats over the world: 2 cell(s), ~12 features</code></pre>
+
+<h2 id="http_reader">http_reader — over HTTP range requests<a class="self" href="#http_reader" aria-label="link to this section">§</a></h2>
+
+<p><a href="https://github.com/afterrealism/fgba/blob/main/crates/fgba/examples/http_reader.rs"><code>crates/fgba/examples/http_reader.rs</code></a>
+reads an FGBA file off any range-capable host with
+<code>Reader::open_url</code> (the <code>http</code> feature), printing the
+bands, one count query, and the transport counters. Try it against the test
+vector served by the CLI:</p>
+
+<pre><code>$ fgba serve testdata/cities_12.a.fgb &amp;
+serving …/testdata/cities_12.a.fgb on http://127.0.0.1:8080 (range requests; ctrl-c to stop)
+
+$ cargo run -p fgba --example http_reader --features http -- http://127.0.0.1:8080/
+http://127.0.0.1:8080/ — FGBA over HTTP range requests
+body length: 1672 bytes
+  band res 2: 2 cells, 12 features (44 bytes)
+stats over the world @ res 2: 2 cell(s), ~12 features
+http: 5 requests, 146 bytes read</code></pre>
+
+<p>Five requests, 146 bytes, for every answer: the range probe, the 32-byte
+footer, the 25-byte directory, and the 44-byte band — then the world-view
+query reuses the cached band
+(<a href="spec.html#http">SPEC §9.2</a>).</p>
+
+<h2 id="wasm">wasm — two-phase streaming in the browser<a class="self" href="#wasm" aria-label="link to this section">§</a></h2>
+
+<p><a href="https://github.com/afterrealism/fgba/tree/main/crates/fgba/examples/wasm"><code>crates/fgba/examples/wasm/</code></a>
+is a dependency-free canvas demo of the two-phase read pattern
+(<a href="spec.html#wasm-read">SPEC §9.3</a>): fetch the file's last 32 bytes
+and parse the footer (doubling as the range-support probe), fetch and
+CRC-verify the directory, fetch the deepest band under the 8 MiB cap, then
+draw the counted A5 pentagons of the world view on a 2D canvas. Only the A5
+grid math is imported (the official
+<a href="https://github.com/felixpalmer/a5">a5-js</a>, via an import map);
+footer/directory/band parsing and the CRC are pure byte work in
+<code>main.js</code>. No build step, no map library, no server-side code —
+the page and the data just have to share an origin
+(<a href="guide/hosting.html#cors">the <code>Range</code> header triggers a
+CORS preflight otherwise</a>).</p>
+
+<pre><code><span class="c"># from the repository root</span>
+$ fgba serve .
+<span class="c"># open http://127.0.0.1:8080/crates/fgba/examples/wasm/index.html</span></code></pre>
+
+<p>With the default test vector the page draws the two occupied res-2
+pentagons (one over New York, one over Western Europe) and reports:</p>
+
+<pre><code>bands: res 2 (44 B)
+drew res 2: 2 of 2 occupied cells cover the world view, ~12 of 12 features
+3 range requests, 101 bytes transferred</code></pre>
+
+<p>Point it at any other <code>.a.fgb</code> with the input box or
+<code>?url=</code>. For fully offline use, copy a5-js's
+<code>dist/a5.js</code> next to the page and point the import map at
+<code>./a5.js</code> — any host that answers <code>206 Partial Content</code>
+works for the data, and the demo says so when one does not.</p>
+
+<p class="fine">All command outputs above are real captures from the reference
+machine (2026 laptop, loopback HTTP), reproduced by running the examples
+against the committed test vector.</p>
+
+</main>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

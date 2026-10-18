@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="FGBA binary specification, Draft v1: a valid FlatGeobuf file plus an aggregate trailer of curve-sorted (A5 cell, count) bands.">
+<title>FGBA Specification, Draft v1 — FGBA</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="index.html">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="index.html">Overview</a>
+      <a href="spec.html" aria-current="page">Specification</a>
+      <a href="guide/quickstart.html">Guide</a>
+      <a href="examples.html">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="prose">
+
+<h1>FGBA — FlatGeobuf Aggregates</h1>
+<p class="lede">Binary Specification, <strong>Draft v1</strong> (2026-10-18).
+Status: Draft. Directory version 1. Comment/change process: see
+<a href="#versioning">§11</a>.</p>
+<p>This document provides adequate detail to create a new implementation of
+FGBA without the aid of the reference implementation.</p>
+
+<nav class="toc" aria-label="Table of contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#purpose">Purpose</a></li>
+    <li><a href="#terminology">Terminology</a></li>
+    <li><a href="#references">Normative references</a></li>
+    <li><a href="#file-layout">File layout</a>
+      <ol><li><a href="#sentinel">Sentinel</a></li></ol>
+    </li>
+    <li><a href="#directory">Directory</a></li>
+    <li><a href="#bands">Aggregate band sections</a></li>
+    <li><a href="#footer">Footer</a></li>
+    <li><a href="#write-protocol">Write protocol</a></li>
+    <li><a href="#read-protocol">Read protocol</a>
+      <ol>
+        <li><a href="#local-files">Local files</a></li>
+        <li><a href="#http">HTTP range requests</a></li>
+        <li><a href="#wasm-read">Non-blocking environments (wasm)</a></li>
+        <li><a href="#ladder">The ladder and the switch (rendering guidance)</a></li>
+      </ol>
+    </li>
+    <li><a href="#compatibility">Compatibility</a>
+      <ol>
+        <li><a href="#fgb-readers">With FGB readers</a></li>
+        <li><a href="#invalid-trailers">Invalid trailers</a></li>
+        <li><a href="#re-export">Re-export caveat</a></li>
+        <li><a href="#fgbo">Composition with FGBO</a></li>
+      </ol>
+    </li>
+    <li><a href="#versioning">Versioning and change policy</a></li>
+    <li><a href="#security">Security considerations</a></li>
+    <li><a href="#appendix-a">Appendix A. Test vector (normative)</a></li>
+    <li><a href="#appendix-b">Appendix B. Measured performance (informative)</a></li>
+  </ol>
+</nav>
+
+<h2 id="purpose">1. Purpose<a class="self" href="#purpose" aria-label="link to this section">§</a></h2>
+
+<p><a href="https://flatgeobuf.org">FlatGeobuf</a> (FGB) is a cloud-optimized
+vector format: its packed Hilbert R-tree answers bounding-box queries over
+HTTP range requests. It holds a single resolution, so low-zoom rendering of
+large datasets reads nearly the whole file, and there is no way to answer
+"how many features are in this region" without reading the features.</p>
+
+<p>FGBA is an <strong>extension of a FlatGeobuf file</strong>: a trailer
+appended after the FGB data section holding <strong>aggregate bands</strong> —
+per-resolution arrays of <code>(A5 cell, count)</code> records. A reader can
+draw a counted, equal-area cell overview at any zoom, or answer count
+analytics, reading only kilobytes; at high zoom it reads full-resolution
+features from the body, exactly as a plain FGB reader does today.</p>
+
+<p>Design principles, in order:</p>
+<ol>
+  <li><strong>Valid FGB invariant</strong> — an FGBA file is always a valid
+  FGB file. Readers that only understand FGB read all features (the "still a
+  valid LAZ" principle of <a href="https://copc.io">COPC</a>).</li>
+  <li><strong>Footer discovery</strong> — extensions are found via a
+  fixed-size footer at end-of-file (the Parquet / PMTiles / FGBO
+  pattern).</li>
+  <li><strong>Reuse, don't reinvent</strong> — geometry and the body's spatial
+  index are plain FGB; cells are <a href="https://a5geo.org">A5</a> cells. The
+  only new encodings are the band records and the directory.</li>
+  <li><strong>Deterministic build</strong> — identical input and options
+  produce byte-identical output (CDN caching, diff distribution,
+  verification).</li>
+  <li><strong>Write-once</strong> — no appends or partial updates; rebuild
+  instead.</li>
+</ol>
+
+<p>Non-goals: editing in place, attribute aggregation richer than
+count/sum/min/max (reserved), tiling/overviews of geometry (that is
+<a href="https://github.com/reearth/flatgeobuf-overviews">FGBO</a>'s role; the
+directory is designed to compose with it, see <a href="#fgbo">§10.4</a>).</p>
+
+<h2 id="terminology">2. Terminology<a class="self" href="#terminology" aria-label="link to this section">§</a></h2>
+
+<ul>
+  <li><strong>body</strong> — the leading, fully valid FlatGeobuf file: magic
+  bytes, Header, packed Hilbert R-tree Index, Data.</li>
+  <li><strong>trailer</strong> — everything after the body's Data section:
+  sentinel, sections, directory, footer.</li>
+  <li><strong>section</strong> — one typed byte range in the trailer, listed
+  in the directory.</li>
+  <li><strong>aggregate band</strong> (or <strong>band</strong>) — a section
+  holding the dataset's feature counts per A5 cell at one A5 resolution.</li>
+  <li><strong>cell</strong> — an A5 cell identifier (64-bit unsigned integer).
+  A5 cells at one resolution are equal-area pentagons; cell IDs follow a
+  space-filling curve, so spatially adjacent cells are numerically
+  adjacent.</li>
+  <li><strong>covering</strong> — the set of cells at one resolution
+  intersecting a query region.</li>
+  <li><strong>ladder</strong> — the mapping from map viewport size to the band
+  resolution a renderer draws.</li>
+  <li><strong>base resolution</strong> — the finest band resolution, chosen at
+  build time.</li>
+</ul>
+
+<h2 id="references">3. Normative references<a class="self" href="#references" aria-label="link to this section">§</a></h2>
+
+<ul>
+  <li><em>FlatGeobuf specification</em> — <a href="https://flatgeobuf.org">https://flatgeobuf.org</a>
+  (body layout, Header fields including <code>features_count</code> and
+  <code>index_node_size</code>).</li>
+  <li><em>A5 — a pentagonal discrete global grid</em> —
+  <a href="https://a5geo.org/docs">https://a5geo.org/docs</a> (cell IDs,
+  resolutions 0–30, equal-area property, space-filling curve order). A5 cell
+  IDs are frozen from A5 v1.0.</li>
+  <li><em>RFC 9110 §14, "Range Requests"</em> —
+  <a href="https://www.rfc-editor.org/rfc/rfc9110.html#section-14">rfc-editor.org</a>
+  — HTTP delivery.</li>
+</ul>
+
+<p>The key words MUST, SHOULD, MAY are to be interpreted as in
+<a href="https://www.rfc-editor.org/rfc/rfc2119">RFC 2119</a>.</p>
+
+<h2 id="file-layout">4. File layout<a class="self" href="#file-layout" aria-label="link to this section">§</a></h2>
+
+<p>All integers are little-endian. Offsets are absolute file offsets.</p>
+
+<pre><code>┌────────────────────────────────────────────────────┐
+│ FlatGeobuf body (magic / Header / Index / Data)    │ <span class="c">← valid FGB</span>
+├────────────────────────────────────────────────────┤
+│ sentinel (4 bytes = FF FF FF FF)                   │ <span class="c">─┐</span>
+│ section 0 .. section n                             │ <span class="c"> │ FGBA trailer</span>
+│ directory (variable)                               │ <span class="c"> │ (FGB readers</span>
+│ footer (fixed 32 bytes, ends the file)             │ <span class="c">─┘ never reach it)</span>
+└────────────────────────────────────────────────────┘</code></pre>
+
+<p>Constraints:</p>
+<ul>
+  <li>The body's Header MUST have <code>features_count &gt; 0</code> and a
+  spatial index (<code>index_node_size &gt; 0</code>). (Both optional in plain
+  FGB; required here so sequential readers stop at the sentinel and index
+  readers never touch the trailer.)</li>
+  <li>The file is write-once. Implementations MUST NOT append to or partially
+  rewrite an FGBA file; rebuild it instead.</li>
+</ul>
+
+<h3 id="sentinel">4.1 Sentinel<a class="self" href="#sentinel" aria-label="link to this section">§</a></h3>
+
+<p>The first 4 bytes of the trailer are the fixed value
+<code>FF FF FF FF</code>. A non-conforming sequential reader that ignores
+<code>features_count</code> interprets this as a feature length prefix of ~4
+GiB and fails immediately, instead of silently misparsing trailer bytes as
+features. (Verified behavior of major implementations: FGBO COMPAT.md — Rust
+and GDAL stop at <code>features_count</code>; the JavaScript full-scan path
+yields all features then errors on the sentinel.)</p>
+
+<h2 id="directory">5. Directory<a class="self" href="#directory" aria-label="link to this section">§</a></h2>
+
+<p>The directory is a table of kind-tagged section entries. Readers MUST skip
+sections whose kind they do not recognize, and MUST NOT fail on them.</p>
+
+<table class="bytes">
+  <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>version</td><td>u8</td><td><code>1</code></td></tr>
+    <tr><td>n_sections</td><td>u8</td><td>number of entries</td></tr>
+    <tr><td><strong>entry</strong> × n_sections</td><td></td><td></td></tr>
+    <tr><td>— kind</td><td>u16</td><td>section type, registry below</td></tr>
+    <tr><td>— flags</td><td>u16</td><td>reserved; writers MUST emit
+    <code>0</code>, readers MUST ignore the value</td></tr>
+    <tr><td>— offset</td><td>u64</td><td>absolute byte offset of the section</td></tr>
+    <tr><td>— size</td><td>u64</td><td>byte size of the section</td></tr>
+    <tr><td>— meta_len</td><td>u16</td><td>byte length of <code>meta</code></td></tr>
+    <tr><td>— meta</td><td>u8[meta_len]</td><td>per-kind metadata</td></tr>
+  </tbody>
+</table>
+
+<p>Kind registry:</p>
+
+<table class="bytes">
+  <thead><tr><th>kind</th><th>section</th><th>meta</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>aggregate band (<a href="#bands">§6</a>)</td>
+    <td><code>[u8 res]</code> — the band's A5 resolution; a mismatch with the
+    band section's own <code>res</code> field makes the trailer invalid
+    (<a href="#invalid-trailers">§10.2</a>)</td></tr>
+    <tr><td>2–0x7FFF</td><td>reserved</td><td>—</td></tr>
+    <tr><td>0x8000–0xFFFF</td><td>vendor/private extensions</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<p>Entries SHOULD be ordered by ascending offset. A directory whose entries
+overlap, lie outside the file, or fail CRC (<a href="#footer">§7</a>) makes
+the trailer invalid: readers MUST treat the file as plain FGB
+(<a href="#invalid-trailers">§10.2</a>), never error on the body.</p>
+
+<p>Rationale for the kind-tagged form: a file can only have one EOF footer, so
+a single extensible directory is what allows future section kinds (simplified
+overviews, clipped segments, per-vertex importance — cf. FGBO) to coexist
+with aggregate bands in one file.</p>
+
+<h2 id="bands">6. Aggregate band sections<a class="self" href="#bands" aria-label="link to this section">§</a></h2>
+
+<p>A band section holds every <strong>occupied</strong> A5 cell at its
+resolution (cells with zero features are absent), sorted by ascending cell
+ID:</p>
+
+<table class="bytes">
+  <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>grid</td><td>u8</td><td><code>1</code> = A5. Other values
+    reserved.</td></tr>
+    <tr><td>res</td><td>u8</td><td>A5 resolution of the band, 0–30</td></tr>
+    <tr><td>band_flags</td><td>u16</td><td>bit 0: records carry attribute
+    aggregates</td></tr>
+    <tr><td>total_features</td><td>u64</td><td>features binned into this
+    band</td></tr>
+    <tr><td>num_cells</td><td>u64</td><td>records that follow</td></tr>
+    <tr><td>records</td><td>record[num_cells]</td><td>ascending
+    <code>cell_id</code></td></tr>
+  </tbody>
+</table>
+
+<p>Record, <code>band_flags &amp; 0 == 0</code> (12 bytes):
+<code>u64 cell_id</code>, <code>u32 count</code>.</p>
+
+<p>Record, <code>band_flags &amp; 1 == 1</code> (36 bytes):
+<code>u64 cell_id</code>, <code>u32 count</code>, then per aggregated
+attribute (one attribute in v1): <code>f64 sum</code>, <code>f64 min</code>,
+<code>f64 max</code>. <em>(Draft note: the attribute-aggregate layout is
+provisional and not yet frozen; see <a href="#versioning">§11</a>.)</em></p>
+
+<p>Validation (readers MUST):</p>
+<ul>
+  <li><code>grid == 1</code>; <code>res ≤ 30</code>;</li>
+  <li>the section size equals <code>header + num_cells × record_len</code>
+  exactly;</li>
+  <li><code>cell_id</code>s are strictly ascending and valid A5 cells at
+  <code>res</code> (<code>a5::is_valid_cell</code> semantics);</li>
+  <li>every <code>count &gt; 0</code>.</li>
+</ul>
+
+<p>A band is a lossless partition of the dataset: the sum of
+<code>count</code> over all records equals <code>total_features</code>.
+Features are binned by the midpoint of their bounding box
+(<a href="#write-protocol">§8</a>), so each feature is counted in exactly one
+cell per band.</p>
+
+<h2 id="footer">7. Footer<a class="self" href="#footer" aria-label="link to this section">§</a></h2>
+
+<p>The last 32 bytes of the file:</p>
+
+<table class="bytes">
+  <thead><tr><th>Bytes</th><th>Content</th></tr></thead>
+  <tbody>
+    <tr><td>0–8</td><td>magic <code>FGBAGG01</code></td></tr>
+    <tr><td>8–16</td><td>directory offset (u64)</td></tr>
+    <tr><td>16–24</td><td>directory size (u64)</td></tr>
+    <tr><td>24–28</td><td>CRC-32 (IEEE 802.3, poly <code>0xEDB88320</code>, as
+    in PNG/zip) of the directory bytes</td></tr>
+    <tr><td>28–32</td><td>reserved; writers MUST emit <code>0</code>, readers
+    MUST ignore the value</td></tr>
+  </tbody>
+</table>
+
+<p>A reader range-reads the last 32 bytes once: magic match → FGBA, fetch the
+directory (and verify CRC); no match → plain FGB. This is the only mandatory
+overhead versus plain FGB, and it is one small read at EOF.</p>
+
+<h2 id="write-protocol">8. Write protocol<a class="self" href="#write-protocol" aria-label="link to this section">§</a></h2>
+
+<p>Producers MUST:</p>
+<ol>
+  <li>Write the body as a valid FlatGeobuf with <code>features_count</code>
+  and a spatial index, features Hilbert-sorted (any conforming FGB writer does
+  this).</li>
+  <li>Bin every feature by the <strong>midpoint of its bounding box</strong>:
+  <code>cell = a5.lonlat_to_cell(midpoint, res)</code> per band resolution.
+  (Points: the point itself. The midpoint convention keeps binning O(1) per
+  feature; large features are attributed to the cell holding their center,
+  matching A5's supercell semantics.)</li>
+  <li>Choose the <strong>base resolution</strong>: the smallest
+  <code>res ≥ 2</code> with
+  <code>a5.get_num_cells(res) ≥ 4 × feature_count</code>, capped at 16.</li>
+  <li>Write bands at <code>{base, base−2, base−4, …}</code> while the
+  resolution stays <code>≥ 2</code>, at most 6 bands, ascending by resolution.
+  (For small datasets the ladder may not reach res 2 — e.g. <code>base =
+  3</code> yields the single band <code>{3}</code>. Renderers drawing a view
+  coarser than the coarsest available band simply use that coarsest band; the
+  cells render small but correct.)</li>
+  <li>Sort each band's records by ascending cell ID. Within a record set,
+  bytes MUST be deterministic: identical input and options MUST produce
+  byte-identical files.</li>
+  <li>Compute the directory CRC over the exact directory bytes.</li>
+</ol>
+
+<p><em>Informative:</em> measured build cost ≈ 1 s per million point features
+for five bands on a 2026 laptop; total trailer size ≈ 2.4 MiB per million
+features (~2% of an uncompressed FGB body).</p>
+
+<h2 id="read-protocol">9. Read protocol<a class="self" href="#read-protocol" aria-label="link to this section">§</a></h2>
+
+<h3 id="local-files">9.1 Local files<a class="self" href="#local-files" aria-label="link to this section">§</a></h3>
+
+<p>Open → seek to EOF−32 → footer → directory (verify CRC) → per query: pick
+the band (<a href="#ladder">§9.4</a>), read its section (or the covering's
+record spans — records are curve-sorted, so a viewport covering is a few
+contiguous runs; measured 1–7 runs), binary-search records by cell ID.</p>
+
+<h3 id="http">9.2 HTTP range requests<a class="self" href="#http" aria-label="link to this section">§</a></h3>
+
+<ol>
+  <li>Probe <code>Range: bytes=0-0</code> once: the server MUST answer
+  <code>206 Partial Content</code> (its <code>Content-Range</code> yields the
+  file length). A <code>200</code> answer means the host does not do range
+  requests; fail with a message naming range support (S3, R2, nginx, and most
+  static hosts qualify).</li>
+  <li>Read the footer and directory once per session; cache them.</li>
+  <li>Fetch each needed band once, whole, when its size is below the reader's
+  band cap (RECOMMENDED default 8 MiB — measured 1.4 MiB per million features
+  at the deepest band); above the cap, binary-search the remote records.
+  Cache bands per session.</li>
+</ol>
+
+<p>Measured (loopback HTTP, 1M-feature file): 3 requests to open, 1 request
+per new band, <strong>0 requests per viewport once the band is
+cached</strong>.</p>
+
+<p>Cross-origin browser reads need CORS: the <code>Range</code> header
+triggers a preflight; hosts SHOULD cache <code>OPTIONS</code> responses (see
+flatgeobuf.org's CDN notes).</p>
+
+<h3 id="wasm-read">9.3 Non-blocking environments (wasm)<a class="self" href="#wasm-read" aria-label="link to this section">§</a></h3>
+
+<p>Readers without blocking I/O SHOULD use a two-phase loop: compute the byte
+ranges needed (footer, directory, band slice), fetch them asynchronously,
+then decode. Chunk caching makes warm views free.</p>
+
+<h3 id="ladder">9.4 The ladder and the switch (rendering guidance)<a class="self" href="#ladder" aria-label="link to this section">§</a></h3>
+
+<p>A renderer showing aggregates SHOULD:</p>
+<ol start="0">
+  <li>Clamp viewport latitudes to the Web Mercator range (±85.0511°) before
+  computing coverings: an A5 covering of a ring touching ±90° degenerates (the
+  polar quintants are partially omitted). Whole-world queries use
+  <code>[-180, -85.0511, 180, 85.0511]</code>.</li>
+  <li>Map the viewport width to a band resolution: the coarsest available band
+  whose average cell edge (<code>a5.cell_edge_length_avg(res)</code>) covers
+  at least ~48 px of the view. (The reference ladder spans res 2–15 so that
+  files with a base resolution up to 16 are served at every zoom; a view finer
+  than the deepest band always reads the body.)</li>
+  <li>Estimate real matches: sum the counts of the deepest band's cells
+  covering the viewport (use <em>overlapping</em> containment —
+  center-containment misses boundary cells at fine zooms).</li>
+  <li>If that sum exceeds the draw limit (order 50k features), draw the band:
+  one pentagon (<code>a5.cell_to_boundary</code>) per occupied cell, styled by
+  <code>count</code>. Otherwise read real features from the body with a normal
+  FGB bbox query. Above the base resolution, always read the body.</li>
+</ol>
+
+<p>Sparse datasets therefore never show cells; dense city cores stay
+aggregated until deep zoom. The same covering-sum query answers count
+analytics without touching feature bytes.</p>
+
+<h2 id="compatibility">10. Compatibility<a class="self" href="#compatibility" aria-label="link to this section">§</a></h2>
+
+<h3 id="fgb-readers">10.1 With FGB readers<a class="self" href="#fgb-readers" aria-label="link to this section">§</a></h3>
+
+<p>An FGBA file is a valid FGB file. Index-driven reads (bbox / HTTP range)
+structurally never reach the trailer. Sequential readers that respect
+<code>features_count</code> stop at the sentinel. Measured matrix (FGBO
+COMPAT.md, same construction): Rust flatgeobuf 6.0.1 ✅, GDAL/OGR 3.12 ✅,
+flatgeobuf JS 4.4.0 index paths ✅; the JS full-scan path yields all features,
+then fails fast on the sentinel ⚠️ (an upstream <code>featuresCount</code> fix
+is the remedy).</p>
+
+<h3 id="invalid-trailers">10.2 Invalid trailers<a class="self" href="#invalid-trailers" aria-label="link to this section">§</a></h3>
+
+<p>A reader that finds a bad footer CRC, a malformed directory, or an invalid
+band MUST fall back to reading the body as plain FGB and SHOULD surface a
+warning. The body is never hostage to the trailer. An implementation MAY
+surface the trailer failure as an error to <em>its</em> caller instead of
+silently falling back, provided the body remains readable through the same
+handle.</p>
+
+<h3 id="re-export">10.3 Re-export caveat<a class="self" href="#re-export" aria-label="link to this section">§</a></h3>
+
+<p>Re-saving through other tools (e.g. <code>ogr2ogr</code>) drops the
+trailer, returning a plain FGB — same known caveat as COPC. Distribute the
+file as built.</p>
+
+<h3 id="fgbo">10.4 Composition with FGBO<a class="self" href="#fgbo" aria-label="link to this section">§</a></h3>
+
+<p>FGBO (FlatGeobuf Overviews) appends its own trailer discovered by its own
+footer. A file can only have one EOF footer, so an FGBO+FGBA composite is
+defined as: FGBO sections listed as entries of the FGBA directory under
+registered kinds (to be assigned), discovered by the FGBA footer. This is why
+the FGBA directory is a kind-tagged table rather than a fixed struct.</p>
+
+<h2 id="versioning">11. Versioning and change policy<a class="self" href="#versioning" aria-label="link to this section">§</a></h2>
+
+<ul>
+  <li>The footer magic's last two bytes are the format version
+  (<code>01</code>). Implementations reading a file with a higher version than
+  they support MUST fall back to the body.</li>
+  <li>The directory's <code>version</code> byte versions the directory
+  encoding independently.</li>
+  <li>New section kinds are additive and do not change the version.</li>
+  <li>Reference-implementation crates follow SemVer; the format itself changes
+  only by a new magic/version and a documented migration.</li>
+  <li>A5 cell IDs are frozen by the A5 project from v1.0, so records written
+  today refer to the same cells forever.</li>
+</ul>
+
+<p>Draft v1 provisional (will change before v1 freeze): the
+attribute-aggregate record layout (<a href="#bands">§6</a>), and the band-cap
+guidance (<a href="#http">§9.2</a>).</p>
+
+<h2 id="security">12. Security considerations<a class="self" href="#security" aria-label="link to this section">§</a></h2>
+
+<p>Trailers are hostile input. Implementations MUST bound every count and
+length before allocating (<code>dir_size ≤ 1 MiB</code> RECOMMENDED;
+<code>num_cells</code> bounded by the section size), MUST NOT recurse on input
+data, and MUST handle truncated reads as errors, not partial success. URL
+readers SHOULD restrict schemes (https; http only for loopback/private
+networks) and follow redirects cautiously.</p>
+
+<h2 id="appendix-a">Appendix A. Test vector (normative)<a class="self" href="#appendix-a" aria-label="link to this section">§</a></h2>
+
+<p><code>testdata/cities_12.a.fgb</code> — 12 point features (4 London, 4
+Paris, 4 New York City), one band at A5 resolution 2, no attribute aggregates.
+Body: 1672 bytes written by flatgeobuf 6.0.1. Trailer, directory and footer
+(105 bytes, file offset 1672 = <code>0x688</code>), complete:</p>
+
+<pre class="hex"><code>00000688  ff ff ff ff 01 02 00 00 0c 00 00 00 00 00 00 00
+00000698  02 00 00 00 00 00 00 00 00 00 00 00 00 00 80 26
+000006a8  04 00 00 00 00 00 00 00 00 00 80 63 08 00 00 00
+000006b8  01 01 01 00 00 00 8c 06 00 00 00 00 00 00 2c 00
+000006c8  00 00 00 00 00 00 01 00 02 46 47 42 41 47 47 30
+000006d8  31 b8 06 00 00 00 00 00 00 19 00 00 00 00 00 00
+000006e8  00 cb 73 fc 41 00 00 00 00</code></pre>
+
+<p>Annotated walk:</p>
+
+<table class="bytes">
+  <thead><tr><th>Offset</th><th>Bytes</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>0x688</td><td><code>ff ff ff ff</code></td><td>sentinel</td></tr>
+    <tr><td>0x68c</td><td><code>01</code></td><td>band: grid = A5</td></tr>
+    <tr><td>0x68d</td><td><code>02</code></td><td>band: res = 2</td></tr>
+    <tr><td>0x68e</td><td><code>00 00</code></td><td>band flags: count
+    only</td></tr>
+    <tr><td>0x690</td><td><code>0c … 00</code></td><td>total_features =
+    12</td></tr>
+    <tr><td>0x698</td><td><code>02 … 00</code></td><td>num_cells = 2</td></tr>
+    <tr><td>0x6a0</td><td><code>00 00 00 00 00 00 80 26</code>,
+    <code>04 00 00 00</code></td><td>cell <code>0x2680000000000000</code>,
+    count 4 (the NYC points)</td></tr>
+    <tr><td>0x6ac</td><td><code>00 00 00 00 00 00 80 63</code>,
+    <code>08 00 00 00</code></td><td>cell <code>0x6380000000000000</code>,
+    count 8 (London + Paris)</td></tr>
+    <tr><td>0x6b8</td><td><code>01</code>, <code>01</code></td><td>directory:
+    version 1, one section</td></tr>
+    <tr><td>0x6ba</td><td><code>01 00</code>, <code>00 00</code></td><td>kind 1
+    (aggregate band), flags 0</td></tr>
+    <tr><td>0x6be</td><td><code>8c 06 … 00</code></td><td>section offset = 1676
+    (<code>0x68c</code>)</td></tr>
+    <tr><td>0x6c6</td><td><code>2c 00 … 00</code></td><td>section size =
+    44</td></tr>
+    <tr><td>0x6ce</td><td><code>01 00</code>, <code>02</code></td><td>meta_len
+    1, meta = res 2</td></tr>
+    <tr><td>0x6d1</td><td><code>46 47 42 41 47 47 30 31</code></td><td>footer
+    magic <code>FGBAGG01</code></td></tr>
+    <tr><td>0x6d9</td><td><code>b8 06 … 00</code></td><td>dir_offset = 1720
+    (<code>0x6b8</code>)</td></tr>
+    <tr><td>0x6e1</td><td><code>19 … 00</code></td><td>dir_size = 25</td></tr>
+    <tr><td>0x6e9</td><td><code>cb 73 fc 41</code></td><td>directory CRC-32 =
+    <code>0x41fc73cb</code></td></tr>
+    <tr><td>0x6ed</td><td><code>00 00 00 00</code></td><td>reserved</td></tr>
+  </tbody>
+</table>
+
+<p>Total file size 1777 bytes; the counts sum to 12 =
+<code>total_features</code>.</p>
+
+<h2 id="appendix-b">Appendix B. Measured performance (informative)<a class="self" href="#appendix-b" aria-label="link to this section">§</a></h2>
+
+<p>Synthetic 1M-point dataset (117 MiB body), reference implementation, 2026
+laptop, release build:</p>
+
+<table class="numbers">
+  <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>build: FGB encode + 5 bands</td><td>2.5 s + 1.1 s</td></tr>
+    <tr><td>trailer size (5 bands)</td><td>2.43 MiB (~2% of body)</td></tr>
+    <tr><td>aggregate query per viewport</td><td>2–91 µs; 1–7 contiguous
+    record runs</td></tr>
+    <tr><td>HTTP: open (probe + footer + directory)</td><td>3 requests,
+    120 B</td></tr>
+    <tr><td>HTTP: first view per band</td><td>1 request (band size, ≤ 1.4
+    MiB)</td></tr>
+    <tr><td>HTTP: subsequent viewports</td><td>0 requests</td></tr>
+    <tr><td>plain-FGB body read, hemisphere view (135k features)</td><td>51 ms
+    local; tens of MB remotely</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<p class="fine">FGBA is developed at
+<a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a>.
+FlatGeobuf is by Björn Harrtell; A5 is by Felix Palmer; the trailer
+conventions follow FGBO (reearth). Apache Arrow's format documentation was the
+structural model for this document.</p>
+
+</main>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

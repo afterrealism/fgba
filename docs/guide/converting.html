@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Converting datasets to FGBA: supported inputs, CRS requirements, determinism, and what v0.1 does not do yet.">
+<title>Converting datasets — FGBA Guide</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="../index.html">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="../index.html">Overview</a>
+      <a href="../spec.html">Specification</a>
+      <a href="quickstart.html" aria-current="page">Guide</a>
+      <a href="../examples.html">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="guide-layout">
+
+  <aside class="guide-nav" aria-label="Guide">
+    <p class="nav-title">Guide</p>
+    <ul>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="rust.html">Reading from Rust</a></li>
+      <li><a href="hosting.html">Hosting (S3 / R2 / nginx)</a></li>
+      <li><a href="converting.html" aria-current="page">Converting datasets</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+    </ul>
+  </aside>
+
+  <main class="guide-body">
+
+<h1>Converting datasets</h1>
+
+<p class="lede"><code>fgba convert</code> reads a source format into a
+FlatGeobuf body (spatial index on, WGS 84) and appends the aggregate trailer
+— one command, deterministic output.</p>
+
+<pre><code>fgba convert buildings.geojson -o buildings.a.fgb
+fgba convert tracks.csv       -o tracks.a.fgb
+fgba convert parcels.shp      -o parcels.a.fgb
+fgba convert existing.fgb     -o existing.a.fgb   <span class="c"># = fgba build</span></code></pre>
+
+<h2 id="inputs">Supported inputs<a class="self" href="#inputs" aria-label="link to this section">§</a></h2>
+
+<table>
+  <thead><tr><th>Format</th><th>Extension</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>GeoJSON</td><td><code>.geojson</code>, <code>.json</code></td>
+      <td>FeatureCollection, single Feature, or bare geometry.</td>
+    </tr>
+    <tr>
+      <td>CSV / TSV</td><td><code>.csv</code>, <code>.tsv</code></td>
+      <td>A WKT column (<code>wkt</code>, <code>geom</code>,
+      <code>geometry</code>, <code>the_geom</code>) or an x/y column pair
+      (<code>x</code>/<code>lon</code>/<code>lng</code>/<code>long</code>/<code>longitude</code>/<code>easting</code>
+      with
+      <code>y</code>/<code>lat</code>/<code>latitude</code>/<code>northing</code>;
+      case-insensitive). Rows with empty or unparseable geometry are skipped
+      and reported.</td>
+    </tr>
+    <tr>
+      <td>Shapefile</td><td><code>.shp</code></td>
+      <td>Geometry only — a missing <code>.dbf</code> sidecar is fine; Z/M
+      ordinates are dropped; NullShape and Multipatch records are
+      skipped.</td>
+    </tr>
+    <tr>
+      <td>FlatGeobuf</td><td><code>.fgb</code></td>
+      <td>The body is kept <strong>byte-identical</strong>; only the trailer
+      is built. An existing trailer is rebuilt from the body (write-once,
+      never edited in place). <code>fgba build</code> does exactly this with a
+      default output name (<code>x.fgb</code> → <code>x.a.fgb</code>).</td>
+    </tr>
+    <tr>
+      <td>GeoParquet</td><td><code>.parquet</code></td>
+      <td><strong>Not in v0.1</strong> — fails with a clear "not implemented
+      yet" error. Planned.</td>
+    </tr>
+    <tr>
+      <td>GeoPackage</td><td><code>.gpkg</code></td>
+      <td><strong>Not in v0.1</strong> — fails with a clear "not implemented
+      yet" error. Planned.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note"><strong>v0.1 converts geometries only.</strong> Feature
+attributes are not carried into the body yet — the output holds each
+feature's geometry with no property columns. Count analytics (the trailer's
+job) are unaffected; attribute display comes with attribute conversion on the
+roadmap.</div>
+
+<h2 id="crs">CRS: WGS 84 lon/lat required<a class="self" href="#crs" aria-label="link to this section">§</a></h2>
+
+<p>The output body is written as WGS 84 (<code>EPSG:4326</code>, lon/lat
+degrees), and A5 cell binning assumes lon/lat. <code>convert</code> does
+<strong>not</strong> reproject: feed it coordinates already in WGS 84.
+Reproject first with another tool (e.g. <code>ogr2ogr -t_srs
+EPSG:4326</code>) if your source is in a projected CRS. Features with empty or
+unusable geometry are skipped and counted in the report
+(<code>0 skipped</code> means a clean read).</p>
+
+<h2 id="ladder">The band ladder<a class="self" href="#ladder" aria-label="link to this section">§</a></h2>
+
+<p>The builder chooses the base resolution automatically — the smallest
+<code>res ≥ 2</code> whose cell count is at least 4× the feature count,
+capped at 16 — and writes bands at <code>{base, base−2, base−4, …}</code>
+while the resolution stays ≥ 2, at most 6 bands
+(<a href="../spec.html#write-protocol">SPEC §8</a>). The 12-feature quickstart
+file gets a single band at resolution 2; a 1M-point dataset gets five bands
+(res 15 down to 7). Every feature is binned by the midpoint of its bounding
+box, so each band is a lossless partition: counts sum to the feature
+count.</p>
+
+<h2 id="determinism">Determinism<a class="self" href="#determinism" aria-label="link to this section">§</a></h2>
+
+<p>Identical input and options produce <strong>byte-identical</strong> output
+(<a href="../spec.html#write-protocol">SPEC §8</a>) — safe for CDN caching,
+diff distribution, and checksum verification. Writes are atomic (temporary
+file plus rename), so a failed conversion never leaves a truncated output.
+Files are write-once: to change data, rebuild from the source rather than
+editing an existing file.</p>
+
+<p>After converting, <code>fgba verify</code> checks the structure end to end
+(body, CRC-verified directory, every band's ascending cells and exact
+partition), and <code>xtask verify-vectors</code> pins the committed test
+vector's checksums — see the
+<a href="https://github.com/afterrealism/fgba">repository</a>.</p>
+
+  </main>
+</div>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

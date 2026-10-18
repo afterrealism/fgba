@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Reading FGBA files from Rust: Reader over local files and HTTP range requests, bands, queries, stats, body reads with the flatgeobuf crate, feature flags, and wasm.">
+<title>Reading from Rust — FGBA Guide</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="../index.html">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="../index.html">Overview</a>
+      <a href="../spec.html">Specification</a>
+      <a href="quickstart.html" aria-current="page">Guide</a>
+      <a href="../examples.html">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="guide-layout">
+
+  <aside class="guide-nav" aria-label="Guide">
+    <p class="nav-title">Guide</p>
+    <ul>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="rust.html" aria-current="page">Reading from Rust</a></li>
+      <li><a href="hosting.html">Hosting (S3 / R2 / nginx)</a></li>
+      <li><a href="converting.html">Converting datasets</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+    </ul>
+  </aside>
+
+  <main class="guide-body">
+
+<h1>Reading from Rust</h1>
+
+<p class="lede">The <code>fgba</code> crate reads the trailer of an FGBA file
+from any <code>Read + Seek</code> source — a local file, an in-memory buffer,
+an HTTP range reader. The FlatGeobuf body stays the business of the
+<code>flatgeobuf</code> crate. Full API reference:
+<a href="https://docs.rs/fgba">docs.rs/fgba</a>.</p>
+
+<pre><code>cargo add fgba           <span class="c"># core reader/writer</span>
+cargo add fgba --features http  <span class="c"># + HTTP range reading (native)</span></code></pre>
+
+<div class="note">Version 0.1 implementing the <strong>draft v1</strong>
+specification. The attribute-aggregate record layout
+(<a href="../spec.html#bands">SPEC §6</a>) is provisional.</div>
+
+<h2 id="local">Local files<a class="self" href="#local" aria-label="link to this section">§</a></h2>
+
+<p><code>Reader::open_path</code> opens a local file buffered. Opening is two
+small reads at end-of-file: the 32-byte footer, then the CRC-verified
+directory. A file without the <code>FGBAGG01</code> magic returns
+<code>Error::NotFgba</code> — treat it as plain FlatGeobuf
+(<a href="../spec.html#invalid-trailers">SPEC §10.2</a>).</p>
+
+<pre><code>let mut r = fgba::Reader::open_path(std::path::Path::new("cities.a.fgb"))?;
+println!("body is {} bytes; the trailer starts there", r.body_len());
+
+<span class="c">// The band ladder: which A5 resolutions carry aggregates.</span>
+for band in r.bands() {
+    println!("res {}: {} bytes at offset {}", band.res, band.size, band.offset);
+}</code></pre>
+
+<h2 id="bands">Bands, queries, stats<a class="self" href="#bands" aria-label="link to this section">§</a></h2>
+
+<ul>
+  <li><code>read_band(res)</code> — read and fully validate one band:
+  <code>(cell_id, count)</code> records, ascending cell IDs, counts summing to
+  <code>total_features</code> (<a href="../spec.html#bands">SPEC §6</a>
+  validation rules).</li>
+  <li><code>query(view, res)</code> — the band records whose cells cover a
+  viewport <code>[min_x, min_y, max_x, max_y]</code> in lon/lat degrees. The
+  covering uses overlapping containment
+  (<a href="../spec.html#ladder">SPEC §9.4</a>).</li>
+  <li><code>stats(view, res)</code> — count-only: occupied cells and estimated
+  feature total, without returning the records.</li>
+</ul>
+
+<pre><code><span class="c">// Count analytics over Europe — a few hundred bytes read, no features touched.</span>
+let europe = r.stats([-11.0, 35.0, 31.0, 71.0], 2)?;
+println!("{} cells, ~{} features", europe.cells, europe.total);
+
+<span class="c">// The raw (cell, count) records over New York.</span>
+for (cell, count) in r.query([-75.0, 39.0, -72.0, 42.0], 2)? {
+    println!("cell {cell:#018x}: {count} features");
+}</code></pre>
+
+<p>Viewport latitudes of exactly ±90° degenerate the A5 covering; clamp to the
+Web Mercator range (±85.0511°) for world views — see
+<a href="../spec.html#ladder">SPEC §9.4</a> step 0.</p>
+
+<h2 id="body">Reading features from the body<a class="self" href="#body" aria-label="link to this section">§</a></h2>
+
+<p>The body is a plain FlatGeobuf file. <code>Reader::body()</code> hands you
+the underlying source positioned at offset 0; open it with the
+<code>flatgeobuf</code> crate and run bbox queries as usual. Read only offsets
+below <code>body_len()</code> — everything beyond is the trailer.</p>
+
+<pre><code>use flatgeobuf::FgbReader;
+
+let mut r = fgba::Reader::open_path(std::path::Path::new("cities.a.fgb"))?;
+let mut fgb = FgbReader::open(r.body()?)?;
+<span class="c">// fgb.select_bbox(minx, miny, maxx, maxy)? — the standard FlatGeobuf API</span></code></pre>
+
+<h2 id="http">Over HTTP range requests<a class="self" href="#http" aria-label="link to this section">§</a></h2>
+
+<p>With the <code>http</code> feature, <code>Reader::open_url</code> adapts a
+remote file to a blocking <code>Read + Seek</code> source over RFC 9110 range
+requests (<a href="../spec.html#http">SPEC §9.2</a>). The server must answer
+<code>206 Partial Content</code> — see <a href="hosting.html">Hosting</a> for
+what that requires of your bucket or CDN.</p>
+
+<pre><code><span class="c">// Cargo.toml: fgba = { version = "0.1", features = ["http"] }</span>
+let mut r = fgba::Reader::open_url("https://example.com/buildings.a.fgb")?;
+let cells = r.query([-0.5, 51.3, 0.3, 51.7], 7)?;
+let total = r.stats([-180.0, -85.0, 180.0, 85.0], 2)?.total;</code></pre>
+
+<p>Opening costs 3 requests: the <code>Range: bytes=0-0</code> probe (which
+also yields the file length), the 32-byte footer, and the directory. Each band
+is then fetched once, whole, when below the 8 MiB cap. The
+<code>HttpRangeReader</code> counts its own traffic for diagnostics:</p>
+
+<pre><code>let http = r.into_inner();
+println!("{} requests, {} bytes read", http.requests(), http.bytes_read());</code></pre>
+
+<p>Hardening (<a href="../spec.html#security">SPEC §12</a>): a 60-second
+per-request timeout, at most 5 redirects, <code>https</code> only — with
+<code>http</code> allowed for loopback hosts — and https→http downgrades
+refused. A non-206 answer mid-read is an error naming range support, never a
+silent full-body read.</p>
+
+<h2 id="flags">Feature flags<a class="self" href="#flags" aria-label="link to this section">§</a></h2>
+
+<table>
+  <thead><tr><th>Flag</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>default</code></td><td>Core reader/writer over
+    <code>Read + Seek</code>; builds for
+    <code>wasm32-unknown-unknown</code>.</td></tr>
+    <tr><td><code>http</code></td><td><code>HttpRangeReader</code> and
+    <code>Reader::open_url</code> via blocking <code>ureq</code>; native
+    targets only.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="wasm">WebAssembly<a class="self" href="#wasm" aria-label="link to this section">§</a></h2>
+
+<p>Blocking I/O does not exist in the browser, so the read is two-phase
+(<a href="../spec.html#wasm-read">SPEC §9.3</a>): compute the byte ranges
+needed (footer, directory, band slice), fetch them asynchronously with
+<code>fetch</code> and a <code>Range</code> header, then decode from memory.
+<code>SliceReader</code> wraps fetched bytes as a seekable source, so the same
+<code>Reader</code> used for files and HTTP decodes them unchanged.</p>
+
+<pre><code><span class="c">// Phase 1 (async, your code or the JS host): fetch the needed ranges.</span>
+let bytes: Vec&lt;u8&gt; = fetch_range(url, start, end).await;
+
+<span class="c">// Phase 2 (sync): decode as usual.</span>
+let mut r = fgba::Reader::open(fgba::SliceReader::new(bytes))?;
+let stats = r.stats([-180.0, -85.0511, 180.0, 85.0511], 2)?;</code></pre>
+
+<p>The <a href="../examples.html#wasm">wasm canvas demo</a> implements the
+whole loop in plain JavaScript — footer, CRC-verified directory, one band —
+against plain static hosting.</p>
+
+  </main>
+</div>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

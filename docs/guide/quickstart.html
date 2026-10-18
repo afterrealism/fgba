@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="FGBA quickstart: install the CLI, convert a dataset, build a trailer, serve over HTTP range requests, open the browser demo.">
+<title>Quickstart — FGBA Guide</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="../index.html">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="../index.html">Overview</a>
+      <a href="../spec.html">Specification</a>
+      <a href="quickstart.html" aria-current="page">Guide</a>
+      <a href="../examples.html">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="guide-layout">
+
+  <aside class="guide-nav" aria-label="Guide">
+    <p class="nav-title">Guide</p>
+    <ul>
+      <li><a href="quickstart.html" aria-current="page">Quickstart</a></li>
+      <li><a href="rust.html">Reading from Rust</a></li>
+      <li><a href="hosting.html">Hosting (S3 / R2 / nginx)</a></li>
+      <li><a href="converting.html">Converting datasets</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+    </ul>
+  </aside>
+
+  <main class="guide-body">
+
+<h1>Quickstart</h1>
+
+<p class="lede">Install the CLI, turn a GeoJSON file into an FGBA file, verify
+it, query it, and stream it over HTTP — in about a minute.</p>
+
+<h2 id="install">Install<a class="self" href="#install" aria-label="link to this section">§</a></h2>
+
+<pre><code><span class="c"># the command-line tool</span>
+cargo install fgba-cli
+
+<span class="c"># or, from a checkout of the repository:</span>
+cargo install --path crates/fgba-cli</code></pre>
+
+<div class="note">The crates are version 0.1 implementing the
+<strong>draft v1</strong> specification. The CLI binary is called
+<code>fgba</code>; the library crate is also called
+<code>fgba</code>.</div>
+
+<h2 id="convert">Convert a dataset<a class="self" href="#convert" aria-label="link to this section">§</a></h2>
+
+<p>Point <code>fgba convert</code> at a GeoJSON, CSV/TSV, Shapefile or
+FlatGeobuf file (details and limits in
+<a href="converting.html">Converting datasets</a>):</p>
+
+<pre><code>$ fgba convert cities.geojson -o cities.a.fgb
+converted cities.geojson → cities.a.fgb (12 features, 0 skipped)
+  features: 12 (0 skipped)
+  bands: 2
+  trailer: 105 B
+  total size: 1.6 KiB
+  wall time: 1.02 ms</code></pre>
+
+<p>The output is a valid FlatGeobuf file with a 105-byte aggregate trailer —
+one band at A5 resolution 2 for this 12-feature input. If you already have a
+FlatGeobuf file, <code>fgba build existing.fgb</code> appends the trailer in
+place of a conversion (output defaults to <code>existing.a.fgb</code>), and
+keeps the body byte-identical.</p>
+
+<h2 id="inspect">Inspect and verify<a class="self" href="#inspect" aria-label="link to this section">§</a></h2>
+
+<pre><code>$ fgba info cities.a.fgb
+cities.a.fgb — FGBA
+  body: FlatGeobuf "cities", 12 features, Point, index node size 16
+  envelope: [-74.02, 40.7, 2.37, 51.52]
+  sizes: body 1.5 KiB, trailer 105 B, total 1.6 KiB
+  bands: 1
+    res  2: 2 cells, 44 B</code></pre>
+
+<pre><code>$ fgba verify cities.a.fgb
+verify cities.a.fgb
+  body: 12 features, Point — OK
+  footer + directory: CRC verified — OK
+  band res 2: 2 cells, 12 features — OK
+OK: valid FGBA, 12 features, 1 band(s)</code></pre>
+
+<h2 id="query">Query counts<a class="self" href="#query" aria-label="link to this section">§</a></h2>
+
+<p><code>stats</code> answers "how many features are in this bounding box"
+from the trailer alone, without touching feature bytes:</p>
+
+<pre><code>$ fgba stats cities.a.fgb --bbox -11,35,31,71
+bbox [-11, 35, 31, 71] res 2
+  cells matched: 1
+  estimated features: 8</code></pre>
+
+<p>London and Paris share one A5 cell at resolution 2, so the Europe bounding
+box reports 8 of the 12 features. <code>--res</code> picks a band explicitly;
+the default is the file's deepest band.</p>
+
+<h2 id="serve">Serve over HTTP<a class="self" href="#serve" aria-label="link to this section">§</a></h2>
+
+<p><code>fgba serve</code> is a minimal range-capable static server bound to
+loopback — enough to exercise HTTP reading end to end. (For production
+hosting see <a href="hosting.html">Hosting</a>.)</p>
+
+<pre><code>$ fgba serve cities.a.fgb
+serving /home/user/lab/cities.a.fgb on http://127.0.0.1:8080 (range requests; ctrl-c to stop)</code></pre>
+
+<p>Probe the range support, exactly as a reader does
+(<a href="../spec.html#http">SPEC §9.2</a> step 1):</p>
+
+<pre><code>$ curl -H 'Range: bytes=0-0' -D - -o /dev/null http://127.0.0.1:8080/
+HTTP/1.1 206 Partial Content
+Content-Length: 1
+Content-Range: bytes 0-0/1641
+Accept-Ranges: bytes
+Content-Type: application/octet-stream</code></pre>
+
+<p>Then read it over HTTP with the
+<a href="../examples.html#http_reader">http_reader example</a> — opening costs
+3 requests (probe, footer, directory) and each band is fetched once.</p>
+
+<h2 id="open">Open in a browser<a class="self" href="#open" aria-label="link to this section">§</a></h2>
+
+<p>The dependency-free <a href="../examples.html#wasm">wasm canvas demo</a>
+draws the aggregate cells straight off any static host. Serve the repository
+root and open the demo page:</p>
+
+<pre><code><span class="c"># from the repository root</span>
+fgba serve .
+<span class="c"># open http://127.0.0.1:8080/crates/fgba/examples/wasm/index.html</span></code></pre>
+
+<p>The page loads the committed test vector
+(<code>testdata/cities_12.a.fgb</code>) by default and reports 3 range
+requests — footer, directory, band. Point it at your own file with
+<code>?url=</code>.</p>
+
+<h2 id="rust">From Rust<a class="self" href="#rust" aria-label="link to this section">§</a></h2>
+
+<p>To read FGBA files from your own code, continue to
+<a href="rust.html">Reading from Rust</a>.</p>
+
+  </main>
+</div>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

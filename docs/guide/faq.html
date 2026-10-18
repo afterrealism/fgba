@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="FGBA FAQ: versus PMTiles, FGBO and GeoParquet; why A5 and not H3; compatibility caveats.">
+<title>FAQ — FGBA Guide</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="../index.html">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="../index.html">Overview</a>
+      <a href="../spec.html">Specification</a>
+      <a href="quickstart.html" aria-current="page">Guide</a>
+      <a href="../examples.html">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="guide-layout">
+
+  <aside class="guide-nav" aria-label="Guide">
+    <p class="nav-title">Guide</p>
+    <ul>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="rust.html">Reading from Rust</a></li>
+      <li><a href="hosting.html">Hosting (S3 / R2 / nginx)</a></li>
+      <li><a href="converting.html">Converting datasets</a></li>
+      <li><a href="faq.html" aria-current="page">FAQ</a></li>
+    </ul>
+  </aside>
+
+  <main class="guide-body">
+
+<h1>Frequently asked questions</h1>
+
+<h2 id="new-format">Is FGBA yet another format?<a class="self" href="#new-format" aria-label="link to this section">§</a></h2>
+
+<p>It is an <em>extension</em>, not a new format: an FGBA file is a valid
+FlatGeobuf file with a trailer after the feature data. Every existing FGB
+reader — GDAL, QGIS, the JavaScript and Rust libraries — reads all features
+from it unchanged and never reaches the trailer (the "still a valid LAZ"
+principle of <a href="https://copc.io">COPC</a>). The only new encodings are
+the band records and the directory; the body, its spatial index, and its
+geometry are plain FlatGeobuf. See
+<a href="../spec.html#purpose">SPEC §1</a>.</p>
+
+<h2 id="pmtiles">How does it compare to PMTiles?<a class="self" href="#pmtiles" aria-label="link to this section">§</a></h2>
+
+<p>Different jobs. <a href="https://github.com/protomaps/PMTiles">PMTiles</a>
+archives <em>baked tiles</em> — pre-rendered raster images or pre-tiled,
+clipped, simplified vector geometries — for display at fixed zoom levels.
+FGBA keeps <em>live features</em>: the full-fidelity geometries stay in the
+body for styling, querying, and download at any zoom, and the trailer adds
+counts per equal-area cell for low-zoom overviews and count analytics
+("how many features are in this region") that a tile archive cannot answer.
+Bake tiles when you need scale-proof cartography; serve FGBA when the data
+itself must stay queryable.</p>
+
+<h2 id="fgbo">How does it compare to FGBO?<a class="self" href="#fgbo" aria-label="link to this section">§</a></h2>
+
+<p><a href="https://github.com/reearth/flatgeobuf-overviews">FGBO</a>
+(FlatGeobuf Overviews) appends simplified-geometry overviews so renderers can
+draw a light version of the data at low zoom. FGBA appends
+<em>aggregations</em> — counts in A5 cells — so renderers can draw an exact
+density overview and analytics can answer counts without reading features.
+They solve different halves of the low-zoom problem, and FGBA's trailer
+conventions deliberately follow FGBO's. The designs are meant to compose: a
+file can only have one EOF footer, so the FGBA directory is a kind-tagged
+table that can list FGBO sections under registered kinds, discovered by the
+FGBA footer (<a href="../spec.html#fgbo">SPEC §10.4</a>).</p>
+
+<h2 id="geoparquet">How does it compare to GeoParquet?<a class="self" href="#geoparquet" aria-label="link to this section">§</a></h2>
+
+<p><a href="https://geoparquet.org">GeoParquet</a> is a columnar analytics
+format: it shines inside query engines (DuckDB, Arrow-based stacks) doing
+scans, filters, and joins over many columns. FGBA is a <em>serving</em>
+format: a single file behind plain HTTP range requests that a map viewer or a
+small client opens with 3 requests, no query engine involved. GeoParquet has
+no per-zoom aggregate bands; FGBA has no columnar predicate pushdown. If your
+workflow is "analyze the table", use GeoParquet; if it is "put the dataset on
+static hosting and render/count it at every zoom", use FGBA.</p>
+
+<h2 id="why-a5">Why A5 cells?<a class="self" href="#why-a5" aria-label="link to this section">§</a></h2>
+
+<p><a href="https://a5geo.org">A5</a> is a pentagonal discrete global grid.
+Three properties make it the right binning for aggregates:</p>
+
+<ul>
+  <li><strong>Equal area.</strong> At one resolution every cell is an
+  equal-area pentagon, so a count per cell is an honest density — comparing
+  cells needs no area correction.</li>
+  <li><strong>Curve-ordered IDs.</strong> Cell IDs follow a space-filling
+  curve, so spatially adjacent cells are numerically adjacent; a viewport
+  covering is a few contiguous runs of the sorted records (measured 1–7 runs)
+  — few seeks, few range requests.</li>
+  <li><strong>Frozen IDs.</strong> A5 cell IDs are frozen by the A5 project
+  from v1.0, so files written today refer to the same cells forever
+  (<a href="../spec.html#versioning">SPEC §11</a>).</li>
+</ul>
+
+<h2 id="why-not-h3">Why not H3?<a class="self" href="#why-not-h3" aria-label="link to this section">§</a></h2>
+
+<p>H3's grid mixes hexagons with 12 pentagons, and cell areas vary within a
+resolution — fine for indexing, but a count per cell is no longer directly
+comparable across the map. A5's topology is a single family of equal-area
+pentagons at every resolution, which is exactly what aggregate counts want.
+(A5 also gives the curve-ordered IDs above.) Nothing about FGBA's directory
+precludes a future H3 band kind — the <code>grid</code> byte in each band
+header leaves that door open — but the reference implementation builds A5
+bands only.</p>
+
+<h2 id="js-caveat">The file breaks my JavaScript FGB reader?<a class="self" href="#js-caveat" aria-label="link to this section">§</a></h2>
+
+<p>Only on one path, by design. Index-driven reads (bbox queries, HTTP range
+streaming) structurally never reach the trailer. Sequential readers that
+respect FlatGeobuf's <code>features_count</code> stop before it. The one
+caveat is the flatgeobuf JS <em>full-scan</em> path, which ignores
+<code>features_count</code>: it yields all features, then hits the trailer's
+4-byte sentinel. The sentinel (<code>FF FF FF FF</code>) is chosen so that
+path <strong>fails fast</strong> — it parses as an impossible ~4 GiB feature
+length — instead of silently misparsing trailer bytes as features
+(<a href="../spec.html#sentinel">SPEC §4.1</a>,
+<a href="../spec.html#fgb-readers">§10.1</a>). The measured matrix: Rust
+flatgeobuf 6.0.1 ✅, GDAL/OGR 3.12 ✅, JS 4.4.0 index paths ✅, JS full scan
+⚠️ fails fast after the features. An upstream <code>featuresCount</code> fix
+is the remedy; until then, use bbox queries in JS.</p>
+
+<h2 id="edit">Can I update an FGBA file in place?<a class="self" href="#edit" aria-label="link to this section">§</a></h2>
+
+<p>No — the format is write-once. Implementations must not append to or
+partially rewrite a file; rebuild it from the source instead
+(<a href="../spec.html#file-layout">SPEC §4</a>). This is what makes the
+bytes deterministic and safe to cache forever on a CDN. The same applies to
+the CLI: <code>fgba build</code> on a file that already has a trailer rebuilds
+the trailer from the body rather than patching it.</p>
+
+<h2 id="corrupt">What if the trailer is corrupt?<a class="self" href="#corrupt" aria-label="link to this section">§</a></h2>
+
+<p>The body is never hostage to the trailer. A bad footer CRC, malformed
+directory, or invalid band means the reader falls back to reading the file as
+plain FlatGeobuf — every feature is still there
+(<a href="../spec.html#invalid-trailers">SPEC §10.2</a>). Trailer bytes are
+treated as hostile input: every count and length is bounded before
+allocation, and nothing panics
+(<a href="../spec.html#security">SPEC §12</a>).</p>
+
+  </main>
+</div>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
