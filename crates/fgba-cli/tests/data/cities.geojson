@@ -1,0 +1,17 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    { "type": "Feature", "properties": { "name": "city1" }, "geometry": { "type": "Point", "coordinates": [2.36, 48.84] } },
+    { "type": "Feature", "properties": { "name": "city2" }, "geometry": { "type": "Point", "coordinates": [2.37, 48.85] } },
+    { "type": "Feature", "properties": { "name": "city3" }, "geometry": { "type": "Point", "coordinates": [2.33, 48.86] } },
+    { "type": "Feature", "properties": { "name": "city4" }, "geometry": { "type": "Point", "coordinates": [2.34, 48.87] } },
+    { "type": "Feature", "properties": { "name": "city5" }, "geometry": { "type": "Point", "coordinates": [-0.14, 51.49] } },
+    { "type": "Feature", "properties": { "name": "city6" }, "geometry": { "type": "Point", "coordinates": [-0.09, 51.51] } },
+    { "type": "Feature", "properties": { "name": "city7" }, "geometry": { "type": "Point", "coordinates": [-0.11, 51.52] } },
+    { "type": "Feature", "properties": { "name": "city8" }, "geometry": { "type": "Point", "coordinates": [-0.12, 51.5] } },
+    { "type": "Feature", "properties": { "name": "city9" }, "geometry": { "type": "Point", "coordinates": [-73.97, 40.73] } },
+    { "type": "Feature", "properties": { "name": "city10" }, "geometry": { "type": "Point", "coordinates": [-73.98, 40.72] } },
+    { "type": "Feature", "properties": { "name": "city11" }, "geometry": { "type": "Point", "coordinates": [-74.0, 40.71] } },
+    { "type": "Feature", "properties": { "name": "city12" }, "geometry": { "type": "Point", "coordinates": [-74.02, 40.7] } }
+  ]
+}

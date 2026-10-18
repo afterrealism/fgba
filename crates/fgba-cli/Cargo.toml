@@ -14,4 +14,14 @@ name = "fgba"
 path = "src/main.rs"
 
 [dependencies]
-fgba = { path = "../fgba" }
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+fgba = { path = "../fgba", features = ["http"] }
+flatgeobuf = { version = "6.0.1", default-features = false }
+geo-types = "0.7"
+geojson = "0.24"
+geozero = { version = "0.15.1", default-features = false, features = [
+    "with-geo",
+    "with-wkt",
+] }
+shapefile = "0.9"
