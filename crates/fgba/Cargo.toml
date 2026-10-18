@@ -13,7 +13,7 @@ workspace = true
 
 [dependencies]
 a5 = "=1.0.0"
-flatgeobuf = "6.0.1"
+flatgeobuf = { version = "6.0.1", default-features = false }
 thiserror = "2"
 ureq = { version = "3", optional = true }
 
