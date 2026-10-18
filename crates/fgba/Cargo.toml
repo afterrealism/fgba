@@ -11,6 +11,11 @@ categories = ["science::geo", "parser-implementations"]
 [lints]
 workspace = true
 
+# Opens FGBA files over HTTP range requests; needs the optional ureq stack.
+[[example]]
+name = "http_reader"
+required-features = ["http"]
+
 [dependencies]
 a5 = "=1.0.0"
 flatgeobuf = { version = "6.0.1", default-features = false }

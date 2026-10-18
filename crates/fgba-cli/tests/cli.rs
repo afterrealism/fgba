@@ -14,7 +14,10 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 const CITIES_GEOJSON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/cities.geojson");
 
 /// The normative FGBA vector.
-const CITIES_VECTOR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/cities_12.a.fgb");
+const CITIES_VECTOR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../testdata/cities_12.a.fgb"
+);
 
 fn fgba(args: &[&str]) -> std::io::Result<Output> {
     Command::new(env!("CARGO_BIN_EXE_fgba")).args(args).output()
@@ -43,10 +46,7 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(tag: &str) -> std::io::Result<TempDir> {
-        let dir = std::env::temp_dir().join(format!(
-            "fgba-cli-test-{}-{tag}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("fgba-cli-test-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
         Ok(TempDir(dir))
@@ -107,7 +107,10 @@ fn convert_verify_info_stats_roundtrip() -> TestResult {
     let text = stdout(&o);
     assert!(text.contains("footer + directory: CRC verified"), "{text}");
     assert!(text.contains("band res 2: 2 cells, 12 features"), "{text}");
-    assert!(text.contains("OK: valid FGBA, 12 features, 1 band"), "{text}");
+    assert!(
+        text.contains("OK: valid FGBA, 12 features, 1 band"),
+        "{text}"
+    );
 
     // Info reports FGBA, the body header and the band table.
     let o = fgba(&["info", &out.to_string_lossy()])?;
@@ -160,7 +163,12 @@ fn build_and_convert_are_deterministic() -> TestResult {
 
     // `build` on an FGBA input rebuilds from the body, byte-identically.
     let rebuilt = tmp.path("rebuilt.a.fgb");
-    let o = fgba(&["build", &a.to_string_lossy(), "-o", &rebuilt.to_string_lossy()])?;
+    let o = fgba(&[
+        "build",
+        &a.to_string_lossy(),
+        "-o",
+        &rebuilt.to_string_lossy(),
+    ])?;
     assert_ok(&o);
     assert!(stderr(&o).contains("already has an FGBA trailer"));
     assert_eq!(std::fs::read(&a)?, std::fs::read(&rebuilt)?);
@@ -213,7 +221,12 @@ fn convert_reads_csv_xy_and_wkt() -> TestResult {
         "name,lon,lat\na,2.36,48.84\nb,-0.14,51.49\nc,-73.97,40.73\n",
     )?;
     let out = tmp.path("csv.a.fgb");
-    let o = fgba(&["convert", &csv_path.to_string_lossy(), "-o", &out.to_string_lossy()])?;
+    let o = fgba(&[
+        "convert",
+        &csv_path.to_string_lossy(),
+        "-o",
+        &out.to_string_lossy(),
+    ])?;
     assert_ok(&o);
     assert!(stdout(&o).contains("3 features"), "{}", stdout(&o));
     let o = fgba(&["verify", &out.to_string_lossy()])?;
@@ -225,14 +238,24 @@ fn convert_reads_csv_xy_and_wkt() -> TestResult {
         "name\twkt\na\tPOINT (2.36 48.84)\nb\tPOINT (-0.14 51.49)\n",
     )?;
     let out = tmp.path("wkt.a.fgb");
-    let o = fgba(&["convert", &wkt_path.to_string_lossy(), "-o", &out.to_string_lossy()])?;
+    let o = fgba(&[
+        "convert",
+        &wkt_path.to_string_lossy(),
+        "-o",
+        &out.to_string_lossy(),
+    ])?;
     assert_ok(&o);
     assert!(stdout(&o).contains("2 features"), "{}", stdout(&o));
 
     // A column-less table fails with a readable error.
     let bad_path = tmp.path("bad.csv");
     std::fs::write(&bad_path, "a,b\n1,2\n")?;
-    let o = fgba(&["convert", &bad_path.to_string_lossy(), "-o", &tmp.path("bad.a.fgb").to_string_lossy()])?;
+    let o = fgba(&[
+        "convert",
+        &bad_path.to_string_lossy(),
+        "-o",
+        &tmp.path("bad.a.fgb").to_string_lossy(),
+    ])?;
     assert_fail(&o);
     assert!(stderr(&o).contains("no geometry column"), "{}", stderr(&o));
     Ok(())
@@ -249,7 +272,12 @@ fn convert_reads_shapefile_points() -> TestResult {
     drop(writer);
 
     let out = tmp.path("shp.a.fgb");
-    let o = fgba(&["convert", &shp.to_string_lossy(), "-o", &out.to_string_lossy()])?;
+    let o = fgba(&[
+        "convert",
+        &shp.to_string_lossy(),
+        "-o",
+        &out.to_string_lossy(),
+    ])?;
     assert_ok(&o);
     assert!(stdout(&o).contains("3 features"), "{}", stdout(&o));
     let o = fgba(&["verify", &out.to_string_lossy()])?;
@@ -257,7 +285,11 @@ fn convert_reads_shapefile_points() -> TestResult {
     assert!(stdout(&o).contains("3 features"), "{}", stdout(&o));
     let o = fgba(&["stats", &out.to_string_lossy(), "--bbox", "-180,-85,180,85"])?;
     assert_ok(&o);
-    assert!(stdout(&o).contains("estimated features: 3"), "{}", stdout(&o));
+    assert!(
+        stdout(&o).contains("estimated features: 3"),
+        "{}",
+        stdout(&o)
+    );
     Ok(())
 }
 
@@ -271,7 +303,12 @@ fn convert_names_unimplemented_formats() -> TestResult {
     ] {
         let input = tmp.path(name);
         std::fs::write(&input, b"")?;
-        let o = fgba(&["convert", &input.to_string_lossy(), "-o", &tmp.path("o.a.fgb").to_string_lossy()])?;
+        let o = fgba(&[
+            "convert",
+            &input.to_string_lossy(),
+            "-o",
+            &tmp.path("o.a.fgb").to_string_lossy(),
+        ])?;
         assert_fail(&o);
         assert!(stderr(&o).contains(want), "{name}: {}", stderr(&o));
     }
@@ -290,7 +327,12 @@ fn serve_smoke_ranges_traversal_and_fgba_reads() -> TestResult {
     let port = free_port()?;
 
     let child = Command::new(env!("CARGO_BIN_EXE_fgba"))
-        .args(["serve", &tmp.0.to_string_lossy(), "--port", &port.to_string()])
+        .args([
+            "serve",
+            &tmp.0.to_string_lossy(),
+            "--port",
+            &port.to_string(),
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
@@ -343,7 +385,12 @@ fn serve_status_codes() -> TestResult {
     convert_cities(&tmp)?;
     let port = free_port()?;
     let child = Command::new(env!("CARGO_BIN_EXE_fgba"))
-        .args(["serve", &tmp.0.to_string_lossy(), "--port", &port.to_string()])
+        .args([
+            "serve",
+            &tmp.0.to_string_lossy(),
+            "--port",
+            &port.to_string(),
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;

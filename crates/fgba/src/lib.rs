@@ -14,10 +14,9 @@
 //! them, never touching feature bytes.
 //!
 //! Reading is transport-agnostic: local files and any `Read + Seek` source
-//! work out of the box, the `http` feature adds
-//! [`HttpRangeReader`](http::HttpRangeReader) for HTTP range requests
-//! (SPEC §9.2), and [`SliceReader`] adapts asynchronously fetched bytes for
-//! non-blocking environments such as wasm (SPEC §9.3).
+//! work out of the box, the `http` feature adds `HttpRangeReader` for HTTP
+//! range requests (SPEC §9.2), and [`SliceReader`] adapts asynchronously
+//! fetched bytes for non-blocking environments such as wasm (SPEC §9.3).
 //!
 //! # Example
 //!

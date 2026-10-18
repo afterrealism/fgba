@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FGBA — two-phase aggregate streaming demo</title>
+<style>
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 1.5rem auto; max-width: 1000px; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; }
+  input { width: min(62ch, 70vw); }
+  canvas { width: 100%; border: 1px solid #bbb; margin-top: .6rem; }
+  #status { white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace; color: #333; }
+  .err { color: #a00; }
+</style>
+<!-- a5-js is the official A5 grid library (pentagon outlines + coverings);
+     pin an exact version, or copy dist/a5.js next to this page for offline use. -->
+<script type="importmap">
+  { "imports": { "a5-js": "https://unpkg.com/a5-js@1.0.0/dist/a5.js" } }
+</script>
+</head>
+<body>
+<h1>FGBA two-phase demo — aggregate cells streamed off static hosting</h1>
+<p>Fetches only the footer, directory and one band of an <code>.a.fgb</code> with HTTP
+range requests (SPEC §9.2–9.3), then draws the counted A5 pentagons for the world view.
+No server-side code, no build step, no map library.</p>
+<p><input id="url" spellcheck="false"> <button id="load">Load</button></p>
+<canvas id="map" width="960" height="454"></canvas>
+<p id="status"></p>
+<script type="module" src="main.js"></script>
+</body>
+</html>

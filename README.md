@@ -44,7 +44,7 @@ Measured on the reference machine (1M features): conversion ≈ 4 s, trailer ≈
 
 ## WebAssembly
 
-The core crate builds for `wasm32-unknown-unknown`. In the browser, fetch byte ranges asynchronously (`fetch` + `Range` header), feed them to `fgba::SliceReader`, decode — two phases, no blocking. See `examples/wasm/`.
+The core crate builds for `wasm32-unknown-unknown`. In the browser, fetch byte ranges asynchronously (`fetch` + `Range` header), feed them to `fgba::SliceReader`, decode — two phases, no blocking. See [`crates/fgba/examples/wasm/`](crates/fgba/examples/wasm/) for a dependency-free two-phase browser demo.
 
 ## Versioning
 

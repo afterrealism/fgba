@@ -31,9 +31,7 @@ pub(crate) fn run(path: &Path, port: u16) -> Result<(), String> {
     let single_file = root.is_file();
     let listener = TcpListener::bind(("127.0.0.1", port))
         .map_err(|e| format!("serve: cannot bind 127.0.0.1:{port}: {e}"))?;
-    let addr = listener
-        .local_addr()
-        .map_err(|e| format!("serve: {e}"))?;
+    let addr = listener.local_addr().map_err(|e| format!("serve: {e}"))?;
     eprintln!(
         "serving {} on http://{addr} (range requests; ctrl-c to stop)",
         root.display()
@@ -140,7 +138,10 @@ enum Range {
 fn range_header(head: &str, len: u64) -> Range {
     let Some(value) = head
         .lines()
-        .find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("range")))
+        .find_map(|l| {
+            l.split_once(':')
+                .filter(|(k, _)| k.eq_ignore_ascii_case("range"))
+        })
         .map(|(_, v)| v.trim().to_string())
     else {
         return Range::None;

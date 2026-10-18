@@ -1204,6 +1204,10 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.0.0"
+dependencies = [
+ "fgba",
+ "flatgeobuf",
+]
 
 [[package]]
 name = "zeroize"
