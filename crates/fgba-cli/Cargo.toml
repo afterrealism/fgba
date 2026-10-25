@@ -18,9 +18,12 @@ name = "fgba"
 path = "src/main.rs"
 
 [dependencies]
+arrow-ipc = { version = "=55.2.0", default-features = false }
+arrow-schema = { version = "=55.2.0", default-features = false }
 clap = { version = "4", features = ["derive"] }
 csv = "1"
-fgba = { version = "0.1.0", path = "../fgba", features = ["http"] }
+fgba = { version = "0.1.0", path = "../fgba", features = ["http", "analytics"] }
+fgba-sql = { version = "0.1.0", path = "../fgba-sql" }
 flatgeobuf = { version = "6.0.1", default-features = false }
 geo-types = "0.7"
 geojson = "0.24"
@@ -29,3 +32,4 @@ geozero = { version = "0.15.1", default-features = false, features = [
     "with-wkt",
 ] }
 shapefile = "0.9"
+tokio = { version = "=1.54.1", features = ["rt", "sync"] }

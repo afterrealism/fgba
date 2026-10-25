@@ -22,8 +22,9 @@ An FGBA file *is* a [FlatGeobuf](https://flatgeobuf.org) file — every existing
 
 ```sh
 cargo install fgba-cli
-fgba convert buildings.geojson -o buildings.a.fgb    # or .shp / .gpkg / .parquet / .fgb
+fgba convert buildings.geojson -o buildings.a.fgb    # or .csv / .shp / .fgb
 fgba info buildings.a.fgb
+fgba query buildings.a.fgb "SELECT COUNT(*) FROM features"
 fgba serve buildings.a.fgb                           # range-capable local server + viewer
 ```
 
@@ -35,12 +36,37 @@ let total = r.stats([-180.0, -85.0, 180.0, 85.0], 2)?.total;
 # Ok::<(), fgba::Error>(())
 ```
 
-Measured on the reference machine (1M features): conversion ≈ 4 s, trailer ≈ 2% of the file, an aggregate viewport query is microseconds; over HTTP it costs 3 requests to open the file, 1 per new zoom band, and **0 per viewport** once the band is cached.
+`fgba query` uses the native `fgba-sql` crate for read-only SQL over local
+FlatGeobuf/FGBA files; no external query engine or format conversion is needed.
+Pure property, geometry-metric, and bbox projections can use parallel Arrow
+column scans, while mixed WKB/metric projections and `SELECT *` execute against
+the exact body. Planar `st_length`, `st_area`, and `st_npoints` WKB functions are
+also available.
 
-## Feature flags
+`fgba build --analytics` and `fgba convert --analytics` emit kind-2
+`BODY_ANALYTICS` and, by default, kind-3 `GEOMETRY_METRICS` when property
+columns exist.
+`--geometry-metrics` also enables analytics; `--no-geometry-metrics` retains
+only kind 2. Kind 3 stores `length`, `area`, `npoints`, and the four bbox
+columns on the kind-2 chunk grid; SQL exposes the first three as `geom_length`,
+`geom_area`, and `geom_npoints`. `--chunk-rows auto` is the default;
+an explicit positive size overrides it. See the
+[native analytics guide](docs/guide/analytics.html).
+
+**Round-2 highways headline:** 255,381,003 features; `COUNT(*)` **105.9 ms**,
+`SUM(geom_length + geom_area)` **467.4 ms**, and near-world zoom **1.0 ms**.
+The Round-1 GeoParquet geometry-aggregate comparator was **13.6 s**
+(**historical baseline, not rerun in Round 2**). See the
+[Round-2 report](data/formats/round2/REPORT.md) and
+[full Round-2 results](data/formats/RESULTS.md#round-2).
+
+Measured on the reference machine (1M features): conversion ≈ 4 s, trailer ≈ 2% of the file, an aggregate viewport query is microseconds; over HTTP, open + the first band costs 4 requests, repeated same-resolution viewports cost **0 band requests**, and changing resolution evicts the one cached band.
+
+## Feature flags and native SQL
 
 - `http` — blocking `Read + Seek` over HTTP range requests (`ureq`); native targets.
-- `convert` (CLI) — GeoJSON/CSV/Shapefile readers; `parquet`, `gpkg` (native only) for GeoParquet/GeoPackage.
+- `analytics` — optional kind-2 property statistics and kind-3 geometry metrics with independent Arrow IPC chunks.
+- `fgba-sql` — native read-only DataFusion SQL, used by `fgba query`; local files only.
 
 ## WebAssembly
 
@@ -48,7 +74,7 @@ The core crate builds for `wasm32-unknown-unknown`. In the browser, fetch byte r
 
 ## Versioning
 
-The format versions by the footer magic (`FGBAGG01`) and the directory version byte; A5 cell IDs are frozen upstream, so files written today refer to the same cells forever. The crates follow SemVer. The specification is [SPEC.md](SPEC.md) (**Draft v1** — the attribute-aggregate record layout is provisional).
+The format versions by the footer magic (`FGBAGG01`) and the directory version byte; A5 cell IDs are frozen upstream, so files written today refer to the same cells forever. The crates follow SemVer. The specification is [SPEC.md](SPEC.md) (**Draft v1**); optional kind-2 and kind-3 analytical columns/statistics are additive and do not change either version.
 
 ## Safety
 
@@ -56,7 +82,7 @@ The format versions by the footer magic (`FGBAGG01`) and the directory version b
 
 ## Status
 
-Draft v1 spec, reference implementation in Rust. Roadmap: attribute aggregates (sum/min/max), composition with [FGBO](https://github.com/reearth/flatgeobuf-overviews) overview sections, browser demo, a second-language reader.
+Draft v1 spec, reference implementation in Rust. Native SQL, property-preserving conversion, and optional kind-2/kind-3 analytics are implemented. Roadmap: composition with [FGBO](https://github.com/reearth/flatgeobuf-overviews) overview sections and a second-language reader.
 
 ## License
 

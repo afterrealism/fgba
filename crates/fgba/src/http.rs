@@ -10,8 +10,11 @@
 //!    requests and is an error naming range support (SPEC §9.2 step 1).
 //! 2. Every `read` is exactly one `Range` request for the wanted span;
 //!    `seek` only moves the local cursor. The core `Reader` reads the
-//!    footer and directory once per session and each band once, so a full
-//!    open + one band costs 4 requests (measured in SPEC §9.2/Appendix B).
+//!    footer and directory once per session, so open + the first band costs
+//!    4 requests (measured in SPEC §9.2/Appendix B). Repeated same-resolution
+//!    `query`/`stats` calls issue no further band request. One band is cached:
+//!    changing resolution evicts it, so switching back to an evicted band is
+//!    not free.
 //!
 //! Hardening (SPEC §12): a 60 s global per-request timeout, at most 5
 //! followed redirects, URL schemes restricted to `https` (with `http`

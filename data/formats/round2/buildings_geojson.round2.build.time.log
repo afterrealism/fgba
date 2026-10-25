@@ -1,0 +1,23 @@
+	Command being timed: "target/release/fgba build data/formats/fgb/buildings_geojson.fgb -o data/formats/a.fgb/buildings_geojson.round2.a.fgb --analytics --chunk-rows auto"
+	User time (seconds): 57.72
+	System time (seconds): 12.37
+	Percent of CPU this job got: 76%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:31.91
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 580952
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 2056
+	Minor (reclaiming a frame) page faults: 143561
+	Voluntary context switches: 218268
+	Involuntary context switches: 980
+	Swaps: 0
+	File system inputs: 13431319
+	File system outputs: 18892855
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

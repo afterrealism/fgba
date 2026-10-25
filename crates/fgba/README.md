@@ -23,6 +23,17 @@ println!("{} occupied cells, ~{} features in view", stats.cells, stats.total);
 ```
 
 CLI: [`fgba-cli`](https://crates.io/crates/fgba-cli) (`cargo install fgba-cli`).
+Its `fgba query` command uses [`fgba-sql`](https://crates.io/crates/fgba-sql)
+for native, read-only SQL over local files.
+
+Enable the `analytics` feature to read optional kind-2 `BODY_ANALYTICS`
+sections. CLI `build`/`convert --analytics` writes exact global statistics,
+per-chunk zone maps and body offsets, and independent Arrow IPC property chunks
+when properties exist. Missing or malformed analytics disables only that
+acceleration; the FlatGeobuf body and kind-1 bands remain available.
+
+`Reader::query`/`stats` cache only the most recently used band; changing
+resolution evicts it. `read_band(res)` always performs a fresh decode.
 
 Format spec, guide, and examples: <https://github.com/afterrealism/fgba>
 

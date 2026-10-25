@@ -1,0 +1,10 @@
+{"count":361979,"dataset":"Flood_Hazard_Areas","extra":"band_total_res5","format":"afgba","metric":271.0,"ms":0.7,"rss_mb":2.9,"size_mb":9691.2,"workload":"zoom_agg"}
+{"count":1427688,"dataset":"Lakes","extra":"band_total_res4","format":"afgba","metric":1437.0,"ms":0.9,"rss_mb":2.9,"size_mb":1873.8,"workload":"zoom_agg"}
+{"count":847977,"dataset":"Land","extra":"band_total_res5","format":"afgba","metric":3452.0,"ms":1.4,"rss_mb":2.8,"size_mb":1553.3,"workload":"zoom_agg"}
+{"count":8180866,"dataset":"US_Census_Blocks","extra":"band_total_res5","format":"afgba","metric":433.0,"ms":0.7,"rss_mb":2.9,"size_mb":13562.6,"workload":"zoom_agg"}
+{"count":24083188,"dataset":"buildings_geojson","extra":"band_total_res4","format":"afgba","metric":9.0,"ms":0.6,"rss_mb":2.9,"size_mb":7227.6,"workload":"zoom_agg"}
+{"count":15705867,"dataset":"buildings_gpkg","extra":"band_total_res5","format":"afgba","metric":141.0,"ms":0.8,"rss_mb":2.9,"size_mb":10168.1,"workload":"zoom_agg"}
+{"count":29139462,"dataset":"footways_lines","extra":"band_total_res4","format":"afgba","metric":1474.0,"ms":0.9,"rss_mb":2.8,"size_mb":11246.0,"workload":"zoom_agg"}
+{"count":255381003,"dataset":"highways_lines","extra":"band_total_res4","format":"afgba","metric":1667.0,"ms":1.0,"rss_mb":2.9,"size_mb":100751.3,"workload":"zoom_agg"}
+{"count":28949836,"dataset":"tracks_lines","extra":"band_total_res4","format":"afgba","metric":1595.0,"ms":1.6,"rss_mb":2.8,"size_mb":15937.7,"workload":"zoom_agg"}
+{"count":15791189,"dataset":"trails_lines","extra":"band_total_res4","format":"afgba","metric":1570.0,"ms":1.1,"rss_mb":2.8,"size_mb":8337.4,"workload":"zoom_agg"}

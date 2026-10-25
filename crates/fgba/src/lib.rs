@@ -70,20 +70,40 @@
 )]
 #![warn(missing_docs)]
 
+#[cfg(feature = "analytics")]
+pub mod analytics;
 pub mod band;
 pub mod error;
 pub mod format;
+#[cfg(feature = "analytics")]
+pub mod geom_analytics;
+#[cfg(feature = "analytics")]
+mod geom_metrics;
+pub mod geometry;
 #[cfg(feature = "http")]
 pub mod http;
+pub mod io;
 pub mod read;
 pub mod slice;
 pub mod write;
 
+#[cfg(feature = "analytics")]
+pub use analytics::{
+    ArrowChunk, BodyAnalytics, BodyRange, ChunkStat, ColumnAnalytics, ColumnDesc, GlobalStat,
+    ValueClass,
+};
 pub use band::{ladder_resolution, AggBand, BandHeader};
 pub use error::{Error, Result};
 pub use format::{Directory, Footer, SectionEntry};
+#[cfg(feature = "analytics")]
+pub use geom_analytics::{GeometryMetrics, MetricColumn, MetricDesc};
+#[cfg(feature = "analytics")]
+pub use geom_metrics::{feature_metrics, FeatureMetrics, MetricsSink};
 #[cfg(feature = "http")]
 pub use http::HttpRangeReader;
 pub use read::{BandMeta, BandStats, Reader};
 pub use slice::SliceReader;
-pub use write::{build, trailer_for, BuildReport};
+pub use write::{
+    build, build_to_writer, build_trailer_streaming, build_with_options, effective_chunk_rows,
+    trailer_for, BuildOptions, BuildReport,
+};

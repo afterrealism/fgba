@@ -1,0 +1,12 @@
+verify data/formats/a.fgb/trails_lines.round2.a.fgb
+  body: 15791189 features, Unknown — OK
+  footer + directory: CRC verified — OK
+  band res 2: 176 cells, 15791189 features — OK
+  band res 4: 1570 cells, 15791189 features — OK
+  band res 6: 14714 cells, 15791189 features — OK
+  band res 8: 106312 cells, 15791189 features — OK
+  band res 10: 555806 cells, 15791189 features — OK
+  band res 12: 2423536 cells, 15791189 features — OK
+  analytics: 15 columns, 3856 chunks — OK
+  geometry metrics: 7 columns, 3856 chunks — OK
+OK: valid FGBA, 15791189 features, 6 band(s)

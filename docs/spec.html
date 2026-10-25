@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="FGBA binary specification, Draft v1: a valid FlatGeobuf file plus an aggregate trailer of curve-sorted (A5 cell, count) bands.">
+<meta name="description" content="FGBA binary specification, Draft v1: valid FlatGeobuf features, curve-sorted A5 aggregate bands, and optional property and geometry-metric analytical columns.">
 <title>FGBA Specification, Draft v1 — FGBA</title>
 <link rel="stylesheet" href="assets/style.css">
 </head>
@@ -41,7 +41,9 @@ FGBA without the aid of the reference implementation.</p>
       <ol><li><a href="#sentinel">Sentinel</a></li></ol>
     </li>
     <li><a href="#directory">Directory</a></li>
-    <li><a href="#bands">Aggregate band sections</a></li>
+    <li><a href="#bands">Aggregate band sections</a> ·
+      <a href="#body-analytics">§6A BODY_ANALYTICS</a> ·
+      <a href="#geometry-metrics">§6B GEOMETRY_METRICS</a></li>
     <li><a href="#footer">Footer</a></li>
     <li><a href="#write-protocol">Write protocol</a></li>
     <li><a href="#read-protocol">Read protocol</a>
@@ -77,10 +79,13 @@ large datasets reads nearly the whole file, and there is no way to answer
 
 <p>FGBA is an <strong>extension of a FlatGeobuf file</strong>: a trailer
 appended after the FGB data section holding <strong>aggregate bands</strong> —
-per-resolution arrays of <code>(A5 cell, count)</code> records. A reader can
-draw a counted, equal-area cell overview at any zoom, or answer count
-analytics, reading only kilobytes; at high zoom it reads full-resolution
-features from the body, exactly as a plain FGB reader does today.</p>
+per-resolution arrays of <code>(A5 cell, count)</code> records — and an
+optional <strong>BODY_ANALYTICS</strong> section with exact property
+statistics and independently readable Arrow IPC column chunks. A reader can
+draw a counted, equal-area cell overview at any zoom, answer count analytics,
+or scan analytical properties without decoding row-oriented feature geometry;
+at high zoom it reads full-resolution features from the body, exactly as a
+plain FGB reader does today.</p>
 
 <p>Design principles, in order:</p>
 <ol>
@@ -91,8 +96,10 @@ features from the body, exactly as a plain FGB reader does today.</p>
   fixed-size footer at end-of-file (the Parquet / PMTiles / FGBO
   pattern).</li>
   <li><strong>Reuse, don't reinvent</strong> — geometry and the body's spatial
-  index are plain FGB; cells are <a href="https://a5geo.org">A5</a> cells. The
-  only new encodings are the band records and the directory.</li>
+  index are plain FGB; cells are <a href="https://a5geo.org">A5</a> cells.
+  Analytical values use standard Arrow IPC files, not a parallel column
+  encoding. The only new fixed encodings are the band/directory/analytics
+  records.</li>
   <li><strong>Deterministic build</strong> — identical input and options
   produce byte-identical output (CDN caching, diff distribution,
   verification).</li>
@@ -100,8 +107,8 @@ features from the body, exactly as a plain FGB reader does today.</p>
   instead.</li>
 </ol>
 
-<p>Non-goals: editing in place, attribute aggregation richer than
-count/sum/min/max (reserved), tiling/overviews of geometry (that is
+<p>Non-goals: editing in place, per-cell attribute aggregation (deferred), a
+DuckDB/GeoParquet migration, tiling/overviews of geometry (that is
 <a href="https://github.com/reearth/flatgeobuf-overviews">FGBO</a>'s role; the
 directory is designed to compose with it, see <a href="#fgbo">§10.4</a>).</p>
 
@@ -209,7 +216,13 @@ sections whose kind they do not recognize, and MUST NOT fail on them.</p>
     <td><code>[u8 res]</code> — the band's A5 resolution; a mismatch with the
     band section's own <code>res</code> field makes the trailer invalid
     (<a href="#invalid-trailers">§10.2</a>)</td></tr>
-    <tr><td>2–0x7FFF</td><td>reserved</td><td>—</td></tr>
+    <tr><td>2</td><td>BODY_ANALYTICS (<a href="#body-analytics">§6A</a>),
+    optional, at most one</td><td>empty; directory <code>flags=0</code>,
+    <code>meta_len=0</code></td></tr>
+    <tr><td>3</td><td>GEOMETRY_METRICS (<a href="#geometry-metrics">§6B</a>),
+    optional, at most one</td><td>empty; directory <code>flags=0</code>,
+    <code>meta_len=0</code></td></tr>
+    <tr><td>4–0x7FFF</td><td>reserved</td><td>—</td></tr>
     <tr><td>0x8000–0xFFFF</td><td>vendor/private extensions</td><td>—</td></tr>
   </tbody>
 </table>
@@ -236,8 +249,8 @@ ID:</p>
     <tr><td>grid</td><td>u8</td><td><code>1</code> = A5. Other values
     reserved.</td></tr>
     <tr><td>res</td><td>u8</td><td>A5 resolution of the band, 0–30</td></tr>
-    <tr><td>band_flags</td><td>u16</td><td>bit 0: records carry attribute
-    aggregates</td></tr>
+    <tr><td>band_flags</td><td>u16</td><td>MUST be <code>0</code>; every bit
+    is reserved for future use</td></tr>
     <tr><td>total_features</td><td>u64</td><td>features binned into this
     band</td></tr>
     <tr><td>num_cells</td><td>u64</td><td>records that follow</td></tr>
@@ -246,18 +259,16 @@ ID:</p>
   </tbody>
 </table>
 
-<p>Record, <code>band_flags &amp; 0 == 0</code> (12 bytes):
-<code>u64 cell_id</code>, <code>u32 count</code>.</p>
-
-<p>Record, <code>band_flags &amp; 1 == 1</code> (36 bytes):
-<code>u64 cell_id</code>, <code>u32 count</code>, then per aggregated
-attribute (one attribute in v1): <code>f64 sum</code>, <code>f64 min</code>,
-<code>f64 max</code>. <em>(Draft note: the attribute-aggregate layout is
-provisional and not yet frozen; see <a href="#versioning">§11</a>.)</em></p>
+<p>The only v1 record, used when <code>band_flags == 0</code> (12 bytes), is
+<code>u64 cell_id</code>, <code>u32 count</code>. Per-cell attribute
+aggregation is deferred; it MUST NOT be enabled with kind-1 flag bits. A future
+demonstrated requirement needs a new section kind with grouped internal
+streams.</p>
 
 <p>Validation (readers MUST):</p>
 <ul>
-  <li><code>grid == 1</code>; <code>res ≤ 30</code>;</li>
+  <li><code>grid == 1</code>; <code>res ≤ 30</code>;
+  <code>band_flags == 0</code>;</li>
   <li>the section size equals <code>header + num_cells × record_len</code>
   exactly;</li>
   <li><code>cell_id</code>s are strictly ascending and valid A5 cells at
@@ -270,6 +281,292 @@ provisional and not yet frozen; see <a href="#versioning">§11</a>.)</em></p>
 Features are binned by the midpoint of their bounding box
 (<a href="#write-protocol">§8</a>), so each feature is counted in exactly one
 cell per band.</p>
+
+<h2 id="body-analytics">6A. BODY_ANALYTICS sections (optional)<a class="self" href="#body-analytics" aria-label="link to this section">§</a></h2>
+
+<p>A writer MAY emit one kind-2 section before the kind-1 bands. It contains
+all FlatGeobuf body property columns in ascending <code>column_index</code>
+order. A body with no properties MUST NOT have an empty kind-2 section.
+Ordinary builds and old readers are unaffected: kind 2 is additive, and
+neither the footer nor the directory version changes.</p>
+
+<p>When GEOMETRY_METRICS (<a href="#geometry-metrics">§6B</a>) is present, it
+MUST use the same <code>R</code>, <code>K</code>, and <code>C</code> as this
+section. The reference writer places kind 2 first, kind 3 second, and the
+kind-1 bands last. Readers locate every optional section by its directory kind
+and MUST NOT depend on directory or physical section order.</p>
+
+<p>Let <code>A = column_count</code>, <code>R = features_count</code>,
+<code>K = chunk_rows &gt; 0</code>, and <code>C = ceil(R/K)</code>. The
+reference CLI defaults to <code>--chunk-rows auto</code> and chooses
+<code>K</code> from <code>R</code>; an explicit positive
+<code>--chunk-rows</code> overrides that choice. <code>K</code> is stored in
+the section, not fixed by the format. All fixed records are little-endian.
+Except for the two fields explicitly marked section-relative, offsets are
+absolute file offsets.</p>
+
+<h3 id="analytics-header">6A.1 Header, descriptors, and body offsets<a class="self" href="#analytics-header" aria-label="link to this section">§</a></h3>
+
+<pre><code>SectionHeader (32 bytes)
+  0   u8  encoding_version = 1
+  1   u8  flags = 0
+  2   u16 reserved = 0
+  4   u32 chunk_rows                 # &gt; 0
+  8   u32 column_count               # &gt; 0 when the section exists
+  12  u32 reserved = 0
+  16  u64 row_count                  # MUST equal FGB features_count
+  24  u64 chunk_count                # MUST equal ceil(row_count/chunk_rows)
+
+ColumnDesc[A] (40 bytes each)
+  0   u16 column_index               # FGB header column index
+  2   u8  fgb_type                   # exact FGB ColumnType
+  3   u8  value_class                # classes below
+  4   u32 flags                      # bit 0 HAS_ARROW_IPC = 1; others zero
+  8   u64 stream_offset              # relative to section start
+  16  u64 stream_size
+  24  u64 arrow_offsets_offset       # relative to section start
+  32  u64 arrow_bytes                # sum of Arrow chunk byte lengths
+
+chunk_offsets[C+1] (u64 each, immediately after descriptors)
+  Absolute offsets of feature length prefixes, strictly increasing.
+  offset[0] = first feature length-prefix in FGB Data.
+  offset[C] = body_len (the trailer sentinel offset).
+  Chunk i owns rows [i*K, min((i+1)*K,R))
+  and body bytes [offset[i], offset[i+1]).</code></pre>
+
+<p>The value classes are <code>0 = opaque</code>
+(Bool/String/Json/DateTime/Binary), <code>1 = signed i64</code>,
+<code>2 = unsigned u64</code>, and <code>3 = f64</code>. Every property type
+has Arrow values and exact null counts. Numeric classes also have bounds,
+sums, and zone maps. Opaque bounds/sums/flags are zero and mean <strong>no
+statistic</strong>, not a zero-valued result.</p>
+
+<p>Arrow arrays use the original values and validity, with these physical
+types: Byte/UByte → Int8/UInt8, Bool → Boolean, Short/UShort → Int16/UInt16,
+Int/UInt → Int32/UInt32, Long/ULong → Int64/UInt64, Float/Double →
+Float32/Float64, String/Json/DateTime → Utf8, and Binary → Binary.</p>
+
+<h3 id="analytics-streams">6A.2 Per-column streams<a class="self" href="#analytics-streams" aria-label="link to this section">§</a></h3>
+
+<p>Each descriptor locates one contiguous stream:</p>
+
+<pre><code>GlobalStat (56 bytes)
+  0   u64 non_null_count             # includes NaN and infinities
+  8   u64 nan_count                  # zero for integer and opaque classes
+  16  u64 min_bits                   # i64/u64 value or f64 bits
+  24  u64 max_bits                   # zero bounds when no statistic exists
+  32  u8[16] sum                     # i128/u128 LE; f64 in first 8 bytes
+  48  u32 flags                      # bit 0 SUM_VALID; bit 1 HAS_INFINITY
+  52  u32 reserved = 0
+
+ChunkStat[C] (24 bytes each)
+  0   u64 min_bits
+  8   u64 max_bits
+  16  u32 non_null_count
+  20  u32 nan_count
+
+arrow_offsets[C+1] (u64 each)
+  Absolute offsets of independent Arrow IPC chunks.
+
+ArrowIpcChunk[C] (variable length)
+  One complete Arrow IPC file per chunk: a single-field schema and exactly
+  one RecordBatch containing the declared values and validity.</code></pre>
+
+<p>The following identities are mandatory:</p>
+
+<pre><code>stream_size = 56 + 24*C + 8*(C+1) + arrow_bytes
+arrow_offsets_offset = stream_offset + 56 + 24*C
+arrow_offsets[C] = section_start + stream_offset + stream_size</code></pre>
+
+<p><code>arrow_offsets[C]</code> is the absolute end of the column stream. In
+particular, <code>stream_offset</code> and
+<code>arrow_offsets_offset</code> are section-relative, but every Arrow offset
+is absolute. Arrow chunks are non-empty, strictly increasing, individually no
+larger than 64 MiB, and independently range-readable. A reader need not read
+another column or any Arrow payload to decode the fixed metadata. The
+RECOMMENDED combined metadata cap is 16 MiB; it is separate from the
+per-Arrow-chunk cap.</p>
+
+<h3 id="analytics-statistics">6A.3 Statistical semantics<a class="self" href="#analytics-statistics" aria-label="link to this section">§</a></h3>
+
+<ul>
+  <li><code>null_count = row_count - non_null_count</code>. NaN is not null.
+  Bounds exist iff <code>non_null_count &gt; nan_count</code>.
+  All-null/all-NaN chunks still contain their rows and MUST NOT be treated as
+  empty for count or null predicates.</li>
+  <li>Integer bounds sign-/zero-extend to i64/u64 and MUST NOT be converted
+  through f64. Integer sums use checked i128/u128 arithmetic; overflow MUST
+  NOT wrap.</li>
+  <li>f32 promotes losslessly to f64 for statistics. Bounds include infinities
+  but exclude NaN. Canonicalize a zero minimum to <code>-0</code> and a zero
+  maximum to <code>+0</code>.</li>
+  <li>Float global SUM is sequential binary64 accumulation in body order,
+  skipping NULL without reassociation. Any NaN, infinity, or non-finite
+  intermediate or final result clears <code>SUM_VALID</code> and zeroes all
+  sum bytes. <code>HAS_INFINITY</code> records infinity independently of sum
+  validity.</li>
+  <li>Empty/all-null numeric sum storage is zero with count zero; consumers
+  decide the appropriate empty aggregate result. Opaque globals have zero NaN
+  count, bounds, sum, and flags. Consumers expose null, rather than zero, for
+  opaque bounds/sums.</li>
+  <li>Reserved fields are zero. Descriptors, records, chunks, and Arrow batches
+  are deterministic. NaN payloads are not stored in statistics, and parallel
+  or reassociated float reduction is forbidden.</li>
+</ul>
+
+<h3 id="analytics-validation">6A.4 Writing and validation<a class="self" href="#analytics-validation" aria-label="link to this section">§</a></h3>
+
+<p>An analytics writer computes <code>data_start</code> and
+<code>leaf_start</code> with checked arithmetic, streams leaf
+<code>NodeItem</code>s independently, and records exact body feature offsets.
+For every body ordinal it MUST verify <code>data_start + leaf.offset ==
+current_feature_offset</code>. It updates statistics for every body row,
+including rows whose empty/invalid geometry is skipped by kind-1 band
+construction. <code>row_count</code> MUST equal the body
+<code>features_count</code>, and a requested build MUST abort on any mismatch
+before emitting output.</p>
+
+<p>Before allocation, readers bound every count/offset by the directory
+section size and applicable metadata/chunk cap. Readers MUST validate
+supported unique ordered column indices, exact FGB type/class matches,
+reserved bytes, exact stream formulas and nonoverlapping ranges, chunk/global
+count consistency, strict body offsets ending at <code>body_len</code>,
+strict Arrow ranges and terminal offsets, and each chunk length in
+<code>1..=64 MiB</code>. Arrow consumers additionally require one field, one
+RecordBatch, the declared type, and the chunk row count.</p>
+
+<p>Missing, unsupported, truncated, or malformed analytics disables only this
+optional acceleration and falls back to the body. It MUST NOT make the body or
+kind-1 bands unreadable (<a href="#invalid-trailers">§10.2</a>).</p>
+
+<h2 id="geometry-metrics">6B. GEOMETRY_METRICS sections (optional)<a class="self" href="#geometry-metrics" aria-label="link to this section">§</a></h2>
+
+<p>A writer MAY emit one kind-3 section only when a kind-2 section exists. It
+contains exactly seven derived geometry columns on the kind-2 chunk grid. A
+property-free body, which cannot have kind 2 (<a href="#body-analytics">§6A</a>),
+therefore MUST NOT have kind 3. Neither the footer magic nor the directory
+version changes.</p>
+
+<p>Let <code>R</code>, <code>K</code>, and <code>C</code> be the kind-2
+<code>row_count</code>, <code>chunk_rows</code>, and <code>chunk_count</code>.
+The kind-3 values MUST equal those fields, and <code>R</code> MUST equal FGB
+<code>features_count</code>. Chunk <code>i</code> owns the same feature ordinals
+<code>[i*K, min((i+1)*K,R))</code> in both sections. All fixed records are
+little-endian. Except for <code>stream_offset</code>, offsets are absolute file
+offsets.</p>
+
+<h3 id="geometry-metrics-header">6B.1 Header and metric descriptors<a class="self" href="#geometry-metrics-header" aria-label="link to this section">§</a></h3>
+
+<pre><code>SectionHeader (32 bytes) — field positions and rules from §6A.1
+  encoding_version=1, flags=0, reserved fields=0
+  chunk_rows=K, column_count=7
+  row_count=R, chunk_count=C
+
+MetricDesc[7] (24 bytes each)
+  0   u16 metric_id                   # unique, ascending 0..6
+  2   u8  arrow_type                  # 0=Float64, 1=UInt32
+  3   u8  reserved = 0
+  4   u32 flags                      # bit 0 HAS_ARROW_IPC = 1; others zero
+  8   u64 stream_offset              # relative to section start
+  16  u64 stream_size                # complete metric stream size</code></pre>
+
+<p>The descriptor order and physical types are:</p>
+
+<table class="bytes">
+  <thead><tr><th>metric_id</th><th>name</th><th>Arrow type</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td><code>length</code></td><td>Float64</td><td>planar Euclidean length</td></tr>
+    <tr><td>1</td><td><code>area</code></td><td>Float64</td><td>planar unsigned area</td></tr>
+    <tr><td>2</td><td><code>npoints</code></td><td>UInt32</td><td>vertex count</td></tr>
+    <tr><td>3</td><td><code>bbox_xmin</code></td><td>Float64</td><td>minimum x</td></tr>
+    <tr><td>4</td><td><code>bbox_ymin</code></td><td>Float64</td><td>minimum y</td></tr>
+    <tr><td>5</td><td><code>bbox_xmax</code></td><td>Float64</td><td>maximum x</td></tr>
+    <tr><td>6</td><td><code>bbox_ymax</code></td><td>Float64</td><td>maximum y</td></tr>
+  </tbody>
+</table>
+
+<p>Unlike <a href="#body-analytics">§6A</a>, kind 3 has no body-offset array:
+chunk ownership is defined entirely by equality with kind 2. The first metric
+stream starts immediately after the seven descriptors.</p>
+
+<h3 id="geometry-metrics-streams">6B.2 Per-metric streams<a class="self" href="#geometry-metrics-streams" aria-label="link to this section">§</a></h3>
+
+<p>Each descriptor locates one contiguous stream with the exact
+<a href="#analytics-streams">§6A.2</a> records:</p>
+
+<pre><code>GlobalStat (56 bytes)
+ChunkStat[C] (24 bytes each)
+arrow_offsets[C+1] (u64 each)
+ArrowIpcChunk[C] (variable length)</code></pre>
+
+<p><code>GlobalStat</code>, <code>ChunkStat</code>, flags, null/NaN handling,
+bounds, sums, and reserved fields have the <a href="#analytics-streams">§6A.2</a>
+and <a href="#analytics-statistics">§6A.3</a> semantics. Float sums are
+sequential binary64 accumulation in body order, skipping null without
+reassociation. <code>npoints</code> uses unsigned integer statistics and a
+checked <code>u128</code> global sum. Every Arrow IPC chunk is a complete
+independent file with one nullable field named as in the table and exactly one
+RecordBatch of the declared physical type.</p>
+
+<p>For each metric, define <code>M = 56 + 24*C + 8*(C+1)</code>. These
+identities are mandatory:</p>
+
+<pre><code>arrow_offsets_offset = stream_offset + 56 + 24*C   # derived, not stored
+stream_size = M + sum(Arrow chunk byte lengths)
+arrow_offsets[0] = section_start + stream_offset + M
+arrow_offsets[C] = section_start + stream_offset + stream_size</code></pre>
+
+<p>Metric streams are contiguous and nonoverlapping in descriptor order; the
+end of the seventh stream equals the section size. Arrow offsets are absolute,
+strictly increasing, and each chunk length is in <code>1..=64 MiB</code>. Fixed
+metadata is bounded by the directory section size and the same recommended
+16 MiB cap as <a href="#body-analytics">§6A</a>. A reader need not read Arrow
+payloads to decode fixed metadata.</p>
+
+<h3 id="geometry-metrics-semantics">6B.3 Geometry and statistical semantics<a class="self" href="#geometry-metrics-semantics" aria-label="link to this section">§</a></h3>
+
+<p>Metrics use planar (Euclidean, degree-unit) arithmetic over WGS84 longitude
+and latitude. Length is the sum of segment lengths in LineStrings and in every
+Polygon exterior and interior ring; Points contribute zero. Area is unsigned
+shoelace area: the absolute exterior-ring area minus each absolute interior
+ring area, with per-Polygon and multi-part accumulation matching
+<code>geo::Area::unsigned_area</code>. Ring closure coordinates count as
+vertices. <code>npoints</code> counts every XY vertex in all parts, including
+interior rings and GeometryCollections, and MUST be checked against
+<code>u32::MAX</code>. The four bbox metrics are the geometry's exact finite
+coordinate envelope. A requested build MUST reject non-finite input coordinates
+rather than invent an envelope.</p>
+
+<p>An empty or absent geometry has logical values <code>length=NaN</code>,
+<code>area=NaN</code>, <code>npoints=0</code>, and
+<code>bbox=[NaN,NaN,NaN,NaN]</code>, with <strong>all seven Arrow validity bits
+set to null</strong>. Null is the stored representation; NaN/zero placeholders
+are not non-null values. Such rows contribute to <code>row_count</code>, but not
+to <code>non_null_count</code>, bounds, or sums. A non-empty Point has non-null
+zero length and area. Empty geometries are still counted by kind 2 and do not
+move the shared chunk grid.</p>
+
+<h3 id="geometry-metrics-validation">6B.4 Writing and validation<a class="self" href="#geometry-metrics-validation" aria-label="link to this section">§</a></h3>
+
+<p>The writer MUST feed property and geometry values in the same body-order
+pass, flush all columns at the same chunk boundaries, and use identical
+in-memory and streaming encodings. It MUST verify kind-2 body counts/offsets
+before emitting kind 3. A kind-3-only file is invalid.</p>
+
+<p>Before allocation, readers MUST bound counts and offsets by the directory
+section size and metadata cap. Readers MUST validate the header, exactly seven
+unique ordered metric IDs and physical types, reserved bytes,
+<code>R</code>/<code>K</code>/<code>C</code> against kind 2 and FGB
+<code>features_count</code>, exact stream formulas and contiguous
+nonoverlapping streams, chunk/global count consistency, strict Arrow ranges and
+terminal offsets, and chunk lengths in <code>1..=64 MiB</code>. Arrow consumers
+additionally require the declared nullable field, one RecordBatch, and the
+shared chunk row count. Metadata lookup is by section kind and is independent
+of directory order.</p>
+
+<p>Malformed or truncated kind 3 disables only geometry-metric acceleration. It
+MUST NOT make the body, kind-1 bands, or valid kind-2 analytics unreadable
+(<a href="#invalid-trailers">§10.2</a>).</p>
 
 <h2 id="footer">7. Footer<a class="self" href="#footer" aria-label="link to this section">§</a></h2>
 
@@ -316,6 +613,10 @@ overhead versus plain FGB, and it is one small read at EOF.</p>
   <li>Sort each band's records by ascending cell ID. Within a record set,
   bytes MUST be deterministic: identical input and options MUST produce
   byte-identical files.</li>
+  <li>When property analytics are requested and properties exist, write kind 2
+  before the bands. When geometry metrics are also requested, write kind 3
+  immediately after kind 2 and before the bands, using the same chunk grid.
+  Do not emit either optional section for a property-free body.</li>
   <li>Compute the directory CRC over the exact directory bytes.</li>
 </ol>
 
@@ -387,6 +688,13 @@ then decode. Chunk caching makes warm views free.</p>
 aggregated until deep zoom. The same covering-sum query answers count
 analytics without touching feature bytes.</p>
 
+<p>For viewports covering at least half the sphere, readers SHOULD filter the
+band's own cells by conservative longitude/latitude bounding-box overlap
+instead of building direct or complement spherical ring coverings, which are
+ambiguous at that scale. This preserves <em>overlapping</em> containment as an
+upper-bound estimate: a boundary cell may be retained even when its exact
+polygon misses the viewport rectangle.</p>
+
 <h2 id="compatibility">10. Compatibility<a class="self" href="#compatibility" aria-label="link to this section">§</a></h2>
 
 <h3 id="fgb-readers">10.1 With FGB readers<a class="self" href="#fgb-readers" aria-label="link to this section">§</a></h3>
@@ -407,6 +715,10 @@ warning. The body is never hostage to the trailer. An implementation MAY
 surface the trailer failure as an error to <em>its</em> caller instead of
 silently falling back, provided the body remains readable through the same
 handle.</p>
+
+<p>Optional sections are independently readable: a malformed kind-3 section
+does not invalidate the body, kind-1 bands, or kind 2, and a malformed kind-2
+section does not invalidate the body or kind-1 bands.</p>
 
 <h3 id="re-export">10.3 Re-export caveat<a class="self" href="#re-export" aria-label="link to this section">§</a></h3>
 
@@ -437,9 +749,9 @@ the FGBA directory is a kind-tagged table rather than a fixed struct.</p>
   today refer to the same cells forever.</li>
 </ul>
 
-<p>Draft v1 provisional (will change before v1 freeze): the
-attribute-aggregate record layout (<a href="#bands">§6</a>), and the band-cap
-guidance (<a href="#http">§9.2</a>).</p>
+<p>Draft v1 provisional (will change before v1 freeze): the band-cap guidance
+(<a href="#http">§9.2</a>). Per-cell attribute aggregation is deferred to a
+demonstrated requirement and a new section kind; kind 1 remains count-only.</p>
 
 <h2 id="security">12. Security considerations<a class="self" href="#security" aria-label="link to this section">§</a></h2>
 

@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/fgba", "crates/fgba-cli", "xtask"]
+members = ["crates/fgba", "crates/fgba-cli", "crates/fgba-sql", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-# MSRV 1.85: required by flatgeobuf 6.0.1, geozero 0.15.1, ureq 3 and clap 4.
-rust-version = "1.85"
+# MSRV 1.89: required by the latest locked dependency graph (including uuid 1.29).
+rust-version = "1.89"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/afterrealism/fgba"
 

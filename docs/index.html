@@ -56,6 +56,7 @@ cargo install fgba-cli
 <span class="c"># convert a dataset (GeoJSON / CSV / Shapefile / FGB) and inspect it</span>
 fgba convert buildings.geojson -o buildings.a.fgb
 fgba info buildings.a.fgb
+fgba query buildings.a.fgb "SELECT COUNT(*) FROM features"
 
 <span class="c"># serve it over loopback HTTP with range requests and open the viewer demo</span>
 fgba serve buildings.a.fgb</code></pre>
@@ -88,6 +89,10 @@ cargo install fgba-cli</code></pre>
       <p><a href="https://docs.rs/fgba">docs.rs/fgba</a> ·
       <a href="https://crates.io/crates/fgba">crates.io/crates/fgba</a> ·
       <a href="https://crates.io/crates/fgba-cli">crates.io/crates/fgba-cli</a></p>
+      <p><code>fgba query</code> and <code>fgba-sql</code> provide native
+      read-only SQL; optional kind-2 analytics add property statistics and
+      independent Arrow IPC chunks. See the
+      <a href="guide/analytics.html">native SQL &amp; analytics guide</a>.</p>
       <p>The core crate builds for <code>wasm32-unknown-unknown</code>: in the
       browser, fetch byte ranges asynchronously and decode with
       <code>SliceReader</code> — two phases, no blocking
@@ -105,8 +110,8 @@ cargo install fgba-cli</code></pre>
           <tr><td>trailer size</td><td>2.43 MiB (~2%)</td></tr>
           <tr><td>aggregate query per viewport</td><td>2–91 µs</td></tr>
           <tr><td>HTTP: open (probe+footer+dir)</td><td>3 requests, 120 B</td></tr>
-          <tr><td>HTTP: first view per band</td><td>1 request</td></tr>
-          <tr><td>HTTP: cached viewport</td><td>0 requests</td></tr>
+          <tr><td>HTTP: first view of current band</td><td>1 request</td></tr>
+          <tr><td>HTTP: warm same-resolution viewport</td><td>0 band requests</td></tr>
         </tbody>
       </table>
       <p class="fine">Reference machine: a 2026 laptop, 2026-10-18; HTTP over

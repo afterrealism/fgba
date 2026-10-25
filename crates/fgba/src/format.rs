@@ -27,6 +27,12 @@ pub const MAX_DIR_SIZE: usize = 1 << 20; // 1 MiB
 /// Section kind: an aggregate band section (SPEC §6).
 pub const KIND_AGGREGATE_BAND: u16 = 1;
 
+/// Section kind: optional body-wide analytical columns and statistics.
+pub const KIND_BODY_ANALYTICS: u16 = 2;
+
+/// Section kind: optional derived geometry metrics on the kind-2 chunk grid.
+pub const KIND_GEOMETRY_METRICS: u16 = 3;
+
 /// The fixed 32-byte footer at end of file (SPEC §7).
 ///
 /// Layout: magic (8) | directory offset (u64) | directory size (u64) |
@@ -95,7 +101,8 @@ impl Footer {
 /// sections this crate does not understand; band accessors skip them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionEntry {
-    /// Section type; [`KIND_AGGREGATE_BAND`] is the only kind defined in v1.
+    /// Section type; [`KIND_AGGREGATE_BAND`], [`KIND_BODY_ANALYTICS`], and
+    /// [`KIND_GEOMETRY_METRICS`] are defined in v1.
     pub kind: u16,
     /// Reserved flags, `0` in v1.
     pub flags: u16,

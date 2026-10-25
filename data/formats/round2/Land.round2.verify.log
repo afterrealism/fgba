@@ -1,0 +1,10 @@
+verify data/formats/a.fgb/Land.round2.a.fgb
+  body: 847984 features, Unknown — OK
+  footer + directory: CRC verified — OK
+  band res 3: 553 cells, 847984 features — OK
+  band res 5: 3457 cells, 847984 features — OK
+  band res 7: 16870 cells, 847984 features — OK
+  band res 9: 63433 cells, 847984 features — OK
+  analytics: 11 columns, 208 chunks — OK
+  geometry metrics: 7 columns, 208 chunks — OK
+OK: valid FGBA, 847984 features, 4 band(s)

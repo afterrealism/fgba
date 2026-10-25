@@ -1,4 +1,6 @@
 /target
 xtask-target
 testdata/large/
+/example/data/*.fgb
+/example/data/uploads/
 *.tmp

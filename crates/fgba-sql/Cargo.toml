@@ -1,0 +1,27 @@
+[package]
+name = "fgba-sql"
+description = "Native streaming SQL for FlatGeobuf and FGBA analytical columns"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "=0.1.92"
+arrow-csv = "=55.2.0"
+arrow-ipc = { version = "=55.2.0", default-features = false }
+datafusion = { version = "=48.0.1", default-features = false, features = ["recursive_protection"] }
+fgba = { version = "0.1.0", path = "../fgba", features = ["analytics"] }
+flatgeobuf = { version = "=6.0.1", default-features = false }
+futures = "=0.3.34"
+geozero = { version = "=0.15.1", default-features = false, features = ["with-wkb"] }
+thiserror = "2"
+tokio = { version = "=1.54.1", features = ["rt", "sync"] }
+
+[dev-dependencies]
+tempfile = "3.24.0"

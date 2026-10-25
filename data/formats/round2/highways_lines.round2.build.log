@@ -1,0 +1,7 @@
+built data/formats/a.fgb/highways_lines.round2.a.fgb
+  features: 255381003 (0 skipped)
+  attribute columns: 5
+  bands: 4, 6, 8, 10, 12, 14
+  trailer: 22790.0 MiB
+  total size: 100751.3 MiB
+  wall time: 706.91 s

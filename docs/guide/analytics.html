@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Native read-only SQL over FlatGeobuf and FGBA: parallel property and geometry-metric scans, planar WKB functions, exact body fallbacks, and A5 viewport estimates.">
+<title>Native SQL &amp; analytics — FGBA Guide</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="bar">
+    <a class="brand" href="../index.html">FGBA<small>FlatGeobuf Aggregates</small></a>
+    <nav class="nav" aria-label="Site">
+      <a href="../index.html">Overview</a>
+      <a href="../spec.html">Specification</a>
+      <a href="quickstart.html" aria-current="page">Guide</a>
+      <a href="../examples.html">Examples</a>
+      <a href="https://github.com/afterrealism/fgba">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="guide-layout">
+
+  <aside class="guide-nav" aria-label="Guide">
+    <p class="nav-title">Guide</p>
+    <ul>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="rust.html">Reading from Rust</a></li>
+      <li><a href="hosting.html">Hosting (S3 / R2 / nginx)</a></li>
+      <li><a href="converting.html">Converting datasets</a></li>
+      <li><a href="analytics.html" aria-current="page">Native SQL &amp; analytics</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+    </ul>
+  </aside>
+
+  <main class="guide-body">
+
+<h1>Native SQL &amp; analytics</h1>
+
+<p class="lede"><code>fgba query</code> runs native, read-only DataFusion SQL
+over local FlatGeobuf and FGBA files through the <code>fgba-sql</code> crate.
+It streams CSV to stdout and needs no external database service or intermediate
+analytical format. Remote SQL URLs are not currently supported.</p>
+
+<h2 id="quickstart">Quickstart<a class="self" href="#quickstart" aria-label="link to this section">§</a></h2>
+
+<p>Install the CLI, count exact body rows, and group preserved properties:</p>
+
+<pre><code>cargo install fgba-cli
+fgba query cities.a.fgb "SELECT COUNT(*) FROM features"
+fgba query cities.a.fgb "SELECT \"name\", COUNT(*) FROM features GROUP BY \"name\""</code></pre>
+
+<p>With <code>--bbox</code>, register the explicitly approximate viewport
+covering. This example counts selected cells and sums their stored counts:</p>
+
+<pre><code>fgba query cities.a.fgb --bbox -10,40,10,60 "SELECT COUNT(*) AS cells, SUM(count) AS estimated FROM a5_viewport_approx"</code></pre>
+
+<p>For numeric property statistics, use an indexed FlatGeobuf fixture that has
+a numeric <code>height</code> column, here called
+<code>cities-metrics.fgb</code>:</p>
+
+<pre><code>fgba build cities-metrics.fgb --analytics --chunk-rows auto -o cities-metrics.a.fgb
+fgba query cities-metrics.a.fgb "SELECT name, row_count, non_null_count, null_count, min_f64, max_f64 FROM attribute_stats WHERE name='height'"</code></pre>
+
+<p>The name-only 12-city <code>cities.a.fgb</code> fixture is different: its
+<code>name</code> property is opaque, so it has exact null counts but no
+numeric bounds or sum. Do not expect <code>min_f64</code>,
+<code>max_f64</code>, or <code>sum_text</code> for that column.</p>
+
+<h2 id="workspace">Interactive workspace<a class="self" href="#workspace" aria-label="link to this section">§</a></h2>
+
+<p>The local Range Lab in <code>example/</code> provides the complete upload →
+conversion → map → SQL workflow. It is a local Node server, not a feature of
+the static documentation host:</p>
+
+<pre><code>cargo build -p fgba-cli
+cd example
+npm start
+# open http://127.0.0.1:8090</code></pre>
+
+<ol>
+  <li>Choose <strong>Upload vector</strong> and select GeoJSON, CSV/TSV,
+  FlatGeobuf, or a Shapefile with its <code>.shx</code> sidecar (plus
+  <code>.dbf</code> for attributes).</li>
+  <li>Set a new <code>.a.fgb</code> name, choose rows per analytical chunk,
+  and keep analytics enabled when you want property/geometry zone maps and
+  Arrow-backed SQL scans.</li>
+  <li>Conversion opens the new object in the <code>uploads</code> bucket on the
+  existing map. Choose <strong>SQL query</strong> for exact rows, counts,
+  <code>attribute_stats</code>, and optional viewport bbox/resolution queries.</li>
+</ol>
+
+<p>Uploads are stored locally and never overwrite an existing object. SQL is
+read-only, coordinates must already be WGS 84 lon/lat, and conversion is done by
+the native CLI rather than a browser-side mock.</p>
+
+<h2 id="tables">Tables and exactness<a class="self" href="#tables" aria-label="link to this section">§</a></h2>
+
+<table>
+  <thead><tr><th>Table</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>features</code></td><td>Exact FlatGeobuf body rows with
+    typed properties, nullable <code>geom_wkb</code>, and seven nullable
+    geometry outputs: <code>geom_length</code>, <code>geom_area</code>,
+    <code>geom_npoints</code>, <code>bbox_xmin</code>,
+    <code>bbox_ymin</code>, <code>bbox_xmax</code>, and
+    <code>bbox_ymax</code>. The first three have SQL-only names for the stored
+    kind-3 <code>length</code>, <code>area</code>, and <code>npoints</code>
+    metrics; the bbox columns retain their stored names.</td></tr>
+    <tr><td><code>a5_band_&lt;res&gt;</code></td><td>Integral
+    <code>cell_id</code>/<code>count</code> records from an available kind-1
+    band. Each count is exact for that cell under bounding-box-midpoint
+    attribution, not a geometry-intersection count.</td></tr>
+    <tr><td><code>a5_viewport_approx</code></td><td>The cells returned by
+    <code>Reader::query</code> for the supplied <code>--bbox</code> and
+    <code>--res</code> (deepest band by default). The selected cells and their
+    stored counts are exact; their sum is only a regional estimate.</td></tr>
+    <tr><td><code>attribute_stats</code></td><td>Exact global kind-2 metadata
+    when that optional section exists: row/null/NaN counts, typed nullable
+    bounds, <code>sum_text</code>, and validity flags. It reads no Arrow
+    payload.</td></tr>
+  </tbody>
+</table>
+
+<pre><code>SELECT "name", geom_wkb, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax
+FROM features LIMIT 100;
+
+SELECT SUM(count) AS midpoint_attributed_total FROM a5_band_2;
+
+SELECT name, nan_count, sum_text, sum_valid, has_infinity
+FROM attribute_stats WHERE name = 'height';</code></pre>
+
+<p><code>COUNT(*) FROM features</code> is an exact body-row count. Only the
+narrow <code>Projection → Aggregate(count(1)) → TableScan</code> logical plan,
+optionally with a literal limit or canonical bbox filter, uses the header or
+R-tree metadata shortcut. Other counts and filters execute normally. A whole
+band's sum covers features successfully assigned by midpoint; a viewport
+covering can overcount or undercount true regional geometry matches and has no
+general error bound.</p>
+
+<p>When a viewport's spherical area is at least half the sphere,
+<code>Reader::query</code> conservatively filters the band's own cells by
+longitude/latitude bbox overlap instead of constructing ambiguous direct or
+complement spherical ring coverings. This avoids the near-world covering
+failure mode; it does not make band sums exact geometry-intersection counts or
+establish a global correctness bound.</p>
+
+<p>Bbox columns express <strong>bbox intersection</strong>, not exact geometry
+intersection. WKB is geometry data, not a CRS-aware SQL type. The
+<code>st_length(Binary)</code>, <code>st_area(Binary)</code>, and
+<code>st_npoints(Binary)</code> UDFs return Float64, Float64, and UInt32 planar
+metrics over supported standard WKB, using the same XY definitions as kind 3.
+They perform no CRS transformation. A NULL argument returns NULL; an empty WKB
+geometry returns <code>0.0</code>, <code>0.0</code>, and <code>0</code>,
+respectively, unlike the NULL stored kind-3 values for an empty geometry.
+Malformed or unsupported WKB is a query error. Preserve and manage CRS semantics
+outside these SQL operators.</p>
+
+<h2 id="execution">Arrow execution and metadata<a class="self" href="#execution" aria-label="link to this section">§</a></h2>
+
+<p>For ordinary full or zone-pruned scans, projections containing only
+properties, geometry metrics, and/or stored bbox columns read just the required
+independent Arrow IPC chunks and validity. These columnar scans split chunks
+across DataFusion target partitions. Direct R-tree-only selections remain
+single-partition.</p>
+
+<p>Mixed WKB/metric projections and <code>SELECT *</code> deliberately use exact
+body execution. Selecting WKB, using a file without usable kind-2 analytics, or
+reading bbox columns without usable kind 3 also falls back to the streaming
+row-oriented FlatGeobuf body. Explicit <code>geom_length</code>,
+<code>geom_area</code>, or <code>geom_npoints</code> projections without valid
+kind 3 fail during planning with guidance to rebuild using
+<code>--geometry-metrics</code>; the WKB UDFs above are the body-backed
+alternative. Results stream as CSV with one header; the CLI does not collect the
+complete result.</p>
+
+<p><code>--scan-threads</code> controls DataFusion target partitions for
+analytical chunk scans. Row order is unspecified unless the query has
+<code>ORDER BY</code>. Multi-partition floating-point aggregates may reassociate
+and differ in low-order bits, so any relative tolerance must be chosen for the
+data. Stored kind-2/kind-3 global statistics remain deterministic sequential
+body-order accumulations.</p>
+
+<p>A valid bbox filter is <strong>Exact</strong> for bbox intersection through
+the existing FlatGeobuf packed R-tree. Numeric/null zone maps are always
+candidate filters: DataFusion retains and applies the residual attribute
+predicates on surviving rows. This is why no second spatial index is created —
+the existing R-tree selects spatial candidates, kind-2/kind-3 zone maps prune
+chunks, and exact kind-2 body offsets locate any required feature ranges.</p>
+
+<p>Missing, unsupported, or malformed optional metadata disables only the
+affected acceleration; for example, malformed kind 3 leaves valid kind 2
+usable. Queries that can proceed without that acceleration use the exact body.
+A malformed Arrow payload falls back to its exact body range <strong>per
+chunk</strong>, without invalidating other chunks, the body, or kind-1 bands.</p>
+
+<p>Null and NaN are distinct: <code>null_count = row_count -
+non_null_count</code>, while NaN is non-null. Float bounds exclude NaN but
+include infinities; all-null/all-NaN values have no numeric bounds and still
+count as rows. Opaque values have no numeric bounds or sum.
+<code>sum_text</code> preserves a valid stored sum as exact metadata text; it
+is not a license to replace arbitrary SQL aggregation, and invalid sums are
+null.</p>
+
+<h2 id="layout">Optional kind-2 and kind-3 layouts<a class="self" href="#layout" aria-label="link to this section">§</a></h2>
+
+<p><code>--analytics</code> on <code>build</code> or <code>convert</code>
+writes kind-2 <code>BODY_ANALYTICS</code> and, by default, kind-3
+<code>GEOMETRY_METRICS</code> when at least one property column exists.
+<code>--geometry-metrics</code> also enables analytics;
+<code>--no-geometry-metrics</code> opts out of kind 3 while retaining kind 2.
+A property-free body gets neither optional section. An ordinary build without
+these flags is unchanged, and neither the footer format nor directory version
+changes.</p>
+
+<p>Kind 2 stores each property column's 56-byte global statistic, 24-byte
+statistics per fixed-row chunk, independent Arrow IPC chunks, and shared
+absolute FlatGeobuf body chunk offsets. Kind 3 reuses the same
+<code>row_count</code>, <code>chunk_rows</code>, and <code>chunk_count</code>
+and contains exactly seven derived columns, without a second body-offset array.
+The reference writer places kind 2 first, kind 3 second, and kind-1 bands last;
+readers find them by directory kind, not physical order.</p>
+
+<table>
+  <thead><tr><th>Stored kind-3 name</th><th>SQL name</th><th>Type and meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>length</code></td><td><code>geom_length</code></td><td>Float64 planar degree-unit length, including every Polygon exterior and interior ring</td></tr>
+    <tr><td><code>area</code></td><td><code>geom_area</code></td><td>Float64 planar unsigned area</td></tr>
+    <tr><td><code>npoints</code></td><td><code>geom_npoints</code></td><td>UInt32 XY vertex count, including ring closure coordinates, interior rings, and GeometryCollections</td></tr>
+    <tr><td><code>bbox_xmin</code></td><td><code>bbox_xmin</code></td><td>Float64 minimum x</td></tr>
+    <tr><td><code>bbox_ymin</code></td><td><code>bbox_ymin</code></td><td>Float64 minimum y</td></tr>
+    <tr><td><code>bbox_xmax</code></td><td><code>bbox_xmax</code></td><td>Float64 maximum x</td></tr>
+    <tr><td><code>bbox_ymax</code></td><td><code>bbox_ymax</code></td><td>Float64 maximum y</td></tr>
+  </tbody>
+</table>
+
+<p>The bbox values are the geometry's exact finite coordinate envelope. An
+empty or absent geometry has NULL in all seven stored columns, although its row
+still counts in kind 2 and stays on the shared chunk grid. A non-empty Point
+has non-null zero length and area. These are planar WGS84 longitude/latitude
+metrics, not geodesic measurements or CRS transformations.</p>
+
+<p><code>--chunk-rows auto</code> is the CLI default and adapts the chunk height
+to the feature count. An explicit positive <code>--chunk-rows</code> size
+overrides automatic sizing; the selected height is stored in the sections and
+is not a format constant. The byte-level records and offset formulas are in
+<a href="../spec.html#body-analytics">SPEC §6A</a> and
+<a href="../spec.html#geometry-metrics">SPEC §6B</a>.</p>
+
+<h2 id="tuning">Pruning and resource tuning<a class="self" href="#tuning" aria-label="link to this section">§</a></h2>
+
+<p>Zone maps help when values are clustered and predicates selective. Random
+or unclustered values can give every chunk overlapping min/max bounds, while
+opaque columns have no numeric zone maps; those queries need full candidate
+scans. Statistics do not make high-cardinality groups, distinct values,
+sorts, joins, medians, or quantiles cheap or memory-free.</p>
+
+<p>Rebuild with an explicit smaller <code>--chunk-rows</code> for finer pruning
+at the cost of more metadata, Arrow files, and range reads. Larger chunks
+reduce that overhead but admit more candidate data. Body ranges separated by
+at most 64 KiB are merged, so skipped bytes inside a small gap can still be
+decoded; larger gaps remain separate ranges. Tune chunking against actual
+result parity, bytes read, and ranges opened rather than expecting every filter
+to prune.</p>
+
+<p>Source row/byte batch limits are not a whole-query memory budget. Arrow and
+DataFusion operators still hold working state, and one oversized feature can
+exceed a source batch target. Correct, complete results take precedence over
+returning a partial aggregate.</p>
+
+<p>The file-oriented <code>fgba build</code> path streams the body and spooled
+sections directly into atomic output. Anonymous temporary files hold Arrow IPC
+chunks instead of retaining complete analytical sections or the trailer in
+memory. Chunk metadata, band midpoint data, and per-band records still consume
+memory; spooling is not a constant-memory guarantee for the whole build.</p>
+
+<h2 id="round2">Measured Round 2<a class="self" href="#round2" aria-label="link to this section">§</a></h2>
+
+<p>Fresh Round-2 measurements cover native <code>afgba-sql</code> analytics and
+<code>afgba</code> zoom queries on the promoted artifacts. The final 40-row SQL
+matrix supplies the gate values. Round-1 DuckDB/GeoParquet timings below are a
+<strong>historical baseline only</strong>: those comparators were not rerun in a
+fresh controlled Round-2 experiment.</p>
+
+<p>Evidence: <a href="../../data/formats/round2/REPORT.md">Round-2 report</a>,
+<a href="../../data/formats/round2/results.jsonl">40-row SQL results</a>,
+<a href="../../data/formats/round2/zoom.jsonl">10-row zoom results</a>,
+<a href="../../data/formats/round2/all-results.jsonl">combined results</a>,
+<a href="../../data/formats/round2/">raw logs</a>, and
+<a href="../../data/formats/round2/pre-round2/">pre-Round-2 backups</a>.
+Canonical-artifact reproduction commands are in
+<a href="../../data/formats/RESULTS.md#round-2-repro-with-promoted-artifacts">RESULTS.md</a>.</p>
+
+<h3 id="round2-parity">Highways parity gates<a class="self" href="#round2-parity" aria-label="link to this section">§</a></h3>
+
+<p>The measured body has 255,381,003 features. Times are milliseconds. Except
+for <code>bbox_count</code>, the count is the exact body-row count; for
+<code>bbox_count</code> it is the matching-row count. The metric is the top-10
+group-row sum for <code>attr_group</code>, the stored geometry-metric sum for
+<code>geom_agg</code>, and selected cells for <code>zoom_agg</code>.</p>
+
+<table>
+  <thead><tr><th>Workload</th><th>Gate</th><th>Round-2 FGBA ms</th><th>Count</th><th>Metric / detail</th><th>Round-1 DuckDB ms (historical)</th><th>Round-1 GeoParquet ms (historical)</th></tr></thead>
+  <tbody>
+    <tr><td><code>full_count</code></td><td>≤ 500</td><td><strong>105.9</strong></td><td>255,381,003</td><td>metadata count</td><td>116.1</td><td>64.4</td></tr>
+    <tr><td><code>attr_group</code></td><td>≤ 3,000</td><td><strong>2623.1</strong></td><td>255,381,003</td><td>243,912,469 top-10 rows; <code>highway</code></td><td>420.6</td><td>518.5</td></tr>
+    <tr><td><code>geom_agg</code></td><td>≤ 5,000</td><td><strong>467.4</strong></td><td>255,381,003</td><td>927,413.7407</td><td>25,829.0</td><td>13,555.5</td></tr>
+    <tr><td><code>bbox_count</code></td><td>≤ 1,000</td><td><strong>723.6</strong></td><td>1,772,568</td><td>10%-extent hot bbox</td><td>26,454.5</td><td>16,041.5</td></tr>
+    <tr><td><code>zoom_agg</code></td><td>≤ 10</td><td><strong>1.0</strong></td><td>255,381,003</td><td>1,667 cells at res 4</td><td>—</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<p>All five gates pass, but this is not a claim that every dataset, engine, or
+workload is equivalent. The 2623.1 ms <code>attr_group</code> result retains a
+substantial DataFusion-versus-DuckDB engine gap. The historical SQL harness
+also used a different top-group metric, so the table makes no cross-round
+<code>attr_group</code> metric-parity claim.</p>
+
+<h3 id="round2-build">All-ten build resources<a class="self" href="#round2-build" aria-label="link to this section">§</a></h3>
+
+<p>Wall time comes from each build log and maxRSS from its matching
+<code>/usr/bin/time -v</code> log. Highways is the final spooled build:
+<strong>884.80 s</strong>, <strong>7,723,444 KiB (~7.37 GiB)</strong>. Every
+dataset is below the 16 GiB gate. The initial completed highways attempt used
+79,021,400 KiB (75.36 GiB); the pre-Round-2 band-build failure was a 112 GiB
+anonymous-RSS OOM.</p>
+
+<table>
+  <thead><tr><th>Dataset</th><th>Wall (s)</th><th>maxRSS (KiB)</th><th>Output (MiB)</th></tr></thead>
+  <tbody>
+    <tr><td>Flood_Hazard_Areas</td><td>84.43</td><td>54,588</td><td>9691.2</td></tr>
+    <tr><td>Lakes</td><td>7.75</td><td>66,184</td><td>1873.8</td></tr>
+    <tr><td>Land</td><td>4.97</td><td>34,548</td><td>1553.3</td></tr>
+    <tr><td>US_Census_Blocks</td><td>64.11</td><td>232,508</td><td>13562.6</td></tr>
+    <tr><td>buildings_geojson</td><td>91.89</td><td>580,952</td><td>7227.6</td></tr>
+    <tr><td>buildings_gpkg</td><td>42.62</td><td>388,540</td><td>10168.1</td></tr>
+    <tr><td>footways_lines</td><td>75.01</td><td>741,292</td><td>11246.0</td></tr>
+    <tr><td>highways_lines</td><td><strong>884.80</strong></td><td><strong>7,723,444</strong></td><td><strong>100751.3</strong></td></tr>
+    <tr><td>tracks_lines</td><td>162.81</td><td>885,760</td><td>15937.7</td></tr>
+    <tr><td>trails_lines</td><td>59.78</td><td>471,128</td><td>8337.4</td></tr>
+  </tbody>
+</table>
+
+<p>A separate filtered US_Census_Blocks count returned 8,180,866 at both
+settings: <code>--scan-threads 1</code> took <strong>0.35 s</strong> and
+<code>--scan-threads 8</code> took <strong>0.04 s</strong>, an arithmetic
+<strong>8.75×</strong> ratio on the displayed values. These are single,
+centisecond-resolution <code>/usr/bin/time</code> runs, not a controlled
+cache-isolated scaling study.</p>
+
+<h3 id="round2-zoom">Fresh near-world zoom results<a class="self" href="#round2-zoom" aria-label="link to this section">§</a></h3>
+
+<p>Fresh zoom timings span 0.6–1.6 ms. “Exact features” comes from the final
+SQL matrix. A zoom total is a midpoint-attributed band sum, not an exact
+geometry-intersection count.</p>
+
+<table>
+  <thead><tr><th>Dataset</th><th>Exact features</th><th>Zoom total</th><th>Delta</th><th>Band res</th><th>Cells</th><th>ms</th></tr></thead>
+  <tbody>
+    <tr><td>Flood_Hazard_Areas</td><td>361,979</td><td>361,979</td><td>0</td><td>5</td><td>271</td><td>0.7</td></tr>
+    <tr><td>Lakes</td><td>1,427,688</td><td>1,427,688</td><td>0</td><td>4</td><td>1,437</td><td>0.9</td></tr>
+    <tr><td>Land</td><td>847,984</td><td>847,977</td><td><strong>-7</strong></td><td>5</td><td>3,452</td><td>1.4</td></tr>
+    <tr><td>US_Census_Blocks</td><td>8,180,866</td><td>8,180,866</td><td>0</td><td>5</td><td>433</td><td>0.7</td></tr>
+    <tr><td>buildings_geojson</td><td>24,083,188</td><td>24,083,188</td><td>0</td><td>4</td><td>9</td><td>0.6</td></tr>
+    <tr><td>buildings_gpkg</td><td>15,705,867</td><td>15,705,867</td><td>0</td><td>5</td><td>141</td><td>0.8</td></tr>
+    <tr><td>footways_lines</td><td>29,139,462</td><td>29,139,462</td><td>0</td><td>4</td><td>1,474</td><td>0.9</td></tr>
+    <tr><td>highways_lines</td><td>255,381,003</td><td>255,381,003</td><td>0</td><td>4</td><td>1,667</td><td>1.0</td></tr>
+    <tr><td>tracks_lines</td><td>28,949,836</td><td>28,949,836</td><td>0</td><td>4</td><td>1,595</td><td>1.6</td></tr>
+    <tr><td>trails_lines</td><td>15,791,189</td><td>15,791,189</td><td>0</td><td>4</td><td>1,570</td><td>1.1</td></tr>
+  </tbody>
+</table>
+
+<p>Nine totals equal the exact body count. Land's sole <strong>-7</strong>
+delta is the measured effect of clamping its -90° south edge to -85°, not a
+gross near-world undercount; its unclamped res-5 band verifies at 847,984.
+Regional viewport aggregates remain band-resolution-dependent estimates with
+no general error bound.</p>
+
+<p><code>buildings_geojson</code> has the sole expected
+<code>attr_group</code> limitation: no string column. Geometry metrics are
+planar degree-unit values, not geodesic measurements. DuckDB
+<code>ST_Length</code> returns 0 for polygons, while FGBA
+<code>geom_length</code> includes exterior and interior rings; use
+<code>ST_Perimeter</code> for that comparison. The single-partition Land check
+matched <code>ST_Perimeter</code> within 1.30e-15 relative and
+<code>ST_Area</code> within 1.15e-15. Multipartition floating-point aggregates
+can reassociate low-order bits. Task 6 HTTP prefetch remains deferred: this SQL
+path is local-only and Round 2 did not implement or exercise HTTP SQL prefetch.</p>
+
+<h2 id="india">India example data<a class="self" href="#india" aria-label="link to this section">§</a></h2>
+
+<p>The current India buildings object contains only <code>OGC_FID</code> and
+<code>geom</code>. Other source attributes were not recovered; querying them
+requires rebuilding from the original dataset with its properties retained.</p>
+
+  </main>
+</div>
+
+<footer class="site-foot">
+  <div class="bar">
+    <span>FGBA is licensed under
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-APACHE">Apache-2.0</a> or
+      <a href="https://github.com/afterrealism/fgba/blob/main/LICENSE-MIT">MIT</a>, at your option.</span>
+    <span>Specification: <strong>Draft v1</strong> — subject to change before v1 freeze.</span>
+    <span class="right"><a href="https://github.com/afterrealism/fgba">github.com/afterrealism/fgba</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

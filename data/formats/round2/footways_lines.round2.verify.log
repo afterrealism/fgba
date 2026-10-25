@@ -1,0 +1,12 @@
+verify data/formats/a.fgb/footways_lines.round2.a.fgb
+  body: 29139462 features, Unknown — OK
+  footer + directory: CRC verified — OK
+  band res 2: 174 cells, 29139462 features — OK
+  band res 4: 1474 cells, 29139462 features — OK
+  band res 6: 12060 cells, 29139462 features — OK
+  band res 8: 71451 cells, 29139462 features — OK
+  band res 10: 302012 cells, 29139462 features — OK
+  band res 12: 1060435 cells, 29139462 features — OK
+  analytics: 17 columns, 7115 chunks — OK
+  geometry metrics: 7 columns, 7115 chunks — OK
+OK: valid FGBA, 29139462 features, 6 band(s)

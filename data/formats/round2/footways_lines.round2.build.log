@@ -1,0 +1,7 @@
+built data/formats/a.fgb/footways_lines.round2.a.fgb
+  features: 29139462 (0 skipped)
+  attribute columns: 17
+  bands: 2, 4, 6, 8, 10, 12
+  trailer: 4189.1 MiB
+  total size: 11246.0 MiB
+  wall time: 75.01 s

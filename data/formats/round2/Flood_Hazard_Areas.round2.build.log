@@ -1,0 +1,7 @@
+built data/formats/a.fgb/Flood_Hazard_Areas.round2.a.fgb
+  features: 361979 (0 skipped)
+  attribute columns: 26
+  bands: 3, 5, 7, 9
+  trailer: 91.9 MiB
+  total size: 9691.2 MiB
+  wall time: 84.43 s

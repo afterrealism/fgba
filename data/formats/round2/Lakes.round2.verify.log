@@ -1,0 +1,11 @@
+verify data/formats/a.fgb/Lakes.round2.a.fgb
+  body: 1427688 features, Unknown — OK
+  footer + directory: CRC verified — OK
+  band res 2: 158 cells, 1427688 features — OK
+  band res 4: 1437 cells, 1427688 features — OK
+  band res 6: 13923 cells, 1427688 features — OK
+  band res 8: 98310 cells, 1427688 features — OK
+  band res 10: 466353 cells, 1427688 features — OK
+  analytics: 25 columns, 349 chunks — OK
+  geometry metrics: 7 columns, 349 chunks — OK
+OK: valid FGBA, 1427688 features, 5 band(s)

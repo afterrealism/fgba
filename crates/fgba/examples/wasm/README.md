@@ -14,6 +14,10 @@ hosting with zero server-side code:
    crate the format is built on), binary-search the curve-sorted records, and
    draw the counted pentagons on a 2D canvas.
 
+Very wide viewports are evaluated in longitude panels of at most 90° and
+unioned by cell ID, avoiding a broad-polygon covering miss in the pinned A5
+implementation. Narrow viewports use the ordinary single-covering path.
+
 **Honest scope:** this is a directory/band parser demo, not a port of the
 `fgba` crate. Footer/directory/band parsing and the CRC are pure byte work in
 `main.js`; only the A5 grid math is imported. There is no build step and no

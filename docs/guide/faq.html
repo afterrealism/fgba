@@ -31,6 +31,7 @@
       <li><a href="rust.html">Reading from Rust</a></li>
       <li><a href="hosting.html">Hosting (S3 / R2 / nginx)</a></li>
       <li><a href="converting.html">Converting datasets</a></li>
+      <li><a href="analytics.html">Native SQL &amp; analytics</a></li>
       <li><a href="faq.html" aria-current="page">FAQ</a></li>
     </ul>
   </aside>
@@ -82,9 +83,12 @@ format: it shines inside query engines (DuckDB, Arrow-based stacks) doing
 scans, filters, and joins over many columns. FGBA is a <em>serving</em>
 format: a single file behind plain HTTP range requests that a map viewer or a
 small client opens with 3 requests, no query engine involved. GeoParquet has
-no per-zoom aggregate bands; FGBA has no columnar predicate pushdown. If your
-workflow is "analyze the table", use GeoParquet; if it is "put the dataset on
-static hosting and render/count it at every zoom", use FGBA.</p>
+no per-zoom aggregate bands. FGBA's optional kind-2 section adds independent
+Arrow IPC property chunks and zone-map pruning for native local SQL, but it
+does not turn the file into a Parquet dataset or require a query-engine
+service. If your workflow is centered on a columnar query engine, use the tool
+that fits it; if it is "put the dataset on static hosting and render/count it
+at every zoom", use FGBA.</p>
 
 <h2 id="why-a5">Why A5 cells?<a class="self" href="#why-a5" aria-label="link to this section">§</a></h2>
 

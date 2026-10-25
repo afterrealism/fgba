@@ -1,0 +1,7 @@
+built data/formats/a.fgb/Lakes.round2.a.fgb
+  features: 1427688 (0 skipped)
+  attribute columns: 25
+  bands: 2, 4, 6, 8, 10
+  trailer: 362.3 MiB
+  total size: 1873.8 MiB
+  wall time: 7.75 s

@@ -1,0 +1,11 @@
+data/formats/a.fgb/highways_lines.round2-spool.a.fgb — FGBA
+  body: FlatGeobuf "highways_lines", 255381003 features, Unknown, index node size 16
+  envelope: [-180, -85.0511284, 180, 82.5254024]
+  sizes: body 77961.3 MiB, trailer 22790.0 MiB, total 100751.3 MiB
+  bands: 6
+    res  4: 1667 cells, 19.6 KiB
+    res  6: 18028 cells, 211.3 KiB
+    res  8: 205297 cells, 2.3 MiB
+    res 10: 2035433 cells, 23.3 MiB
+    res 12: 14643342 cells, 167.6 MiB
+    res 14: 62262447 cells, 712.5 MiB

@@ -1,0 +1,11 @@
+verify data/formats/a.fgb/US_Census_Blocks.round2.a.fgb
+  body: 8180866 features, Unknown — OK
+  footer + directory: CRC verified — OK
+  band res 3: 54 cells, 8180866 features — OK
+  band res 5: 433 cells, 8180866 features — OK
+  band res 7: 5062 cells, 8180866 features — OK
+  band res 9: 66438 cells, 8180866 features — OK
+  band res 11: 763161 cells, 8180866 features — OK
+  analytics: 12 columns, 1998 chunks — OK
+  geometry metrics: 7 columns, 1998 chunks — OK
+OK: valid FGBA, 8180866 features, 5 band(s)

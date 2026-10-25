@@ -31,6 +31,7 @@
       <li><a href="rust.html">Reading from Rust</a></li>
       <li><a href="hosting.html">Hosting (S3 / R2 / nginx)</a></li>
       <li><a href="converting.html" aria-current="page">Converting datasets</a></li>
+      <li><a href="analytics.html">Native SQL &amp; analytics</a></li>
       <li><a href="faq.html">FAQ</a></li>
     </ul>
   </aside>
@@ -69,16 +70,17 @@ fgba convert existing.fgb     -o existing.a.fgb   <span class="c"># = fgba build
     </tr>
     <tr>
       <td>Shapefile</td><td><code>.shp</code></td>
-      <td>Geometry only — a missing <code>.dbf</code> sidecar is fine; Z/M
-      ordinates are dropped; NullShape and Multipatch records are
-      skipped.</td>
+      <td>Properties are read from the <code>.dbf</code> sidecar when present;
+      a missing sidecar still yields geometry-only features. Z/M ordinates are
+      dropped; NullShape and Multipatch records are skipped.</td>
     </tr>
     <tr>
       <td>FlatGeobuf</td><td><code>.fgb</code></td>
       <td>The body is kept <strong>byte-identical</strong>; only the trailer
-      is built. An existing trailer is rebuilt from the body (write-once,
-      never edited in place). <code>fgba build</code> does exactly this with a
-      default output name (<code>x.fgb</code> → <code>x.a.fgb</code>).</td>
+      is built. An existing trailer is rebuilt from its body and written
+      atomically to the output, including safe in-place rebuilds.
+      <code>fgba build</code> uses a default output name
+      (<code>x.fgb</code> → <code>x.a.fgb</code>) when none is supplied.</td>
     </tr>
     <tr>
       <td>GeoParquet</td><td><code>.parquet</code></td>
@@ -93,11 +95,39 @@ fgba convert existing.fgb     -o existing.a.fgb   <span class="c"># = fgba build
   </tbody>
 </table>
 
-<div class="note"><strong>v0.1 converts geometries only.</strong> Feature
-attributes are not carried into the body yet — the output holds each
-feature's geometry with no property columns. Count analytics (the trailer's
-job) are unaffected; attribute display comes with attribute conversion on the
-roadmap.</div>
+<h2 id="properties">Deterministic property preservation<a class="self" href="#properties" aria-label="link to this section">§</a></h2>
+
+<p>Conversion retains source properties instead of discarding them. The whole
+schema is inferred before writing, columns have deterministic name order, and
+missing or explicit null values make a column nullable. Numeric types stay
+lossless: signed widths widen to <code>Long</code>, unsigned widths to
+<code>ULong</code>, and <code>Float</code>/<code>Double</code> mixtures to
+<code>Double</code>. Incompatible types are errors rather than silent string
+coercion.</p>
+
+<p>Case-insensitive duplicate property names and collisions with the reserved
+SQL names <code>geom_wkb</code>, <code>bbox_xmin</code>,
+<code>bbox_ymin</code>, <code>bbox_xmax</code>, <code>bbox_ymax</code>,
+<code>geom_length</code>, <code>geom_area</code>, and
+<code>geom_npoints</code> are rejected. FlatGeobuf inputs keep their entire body
+byte-identical. Shapefile DBF values are preserved when the sidecar exists;
+a missing DBF intentionally produces geometry-only features.</p>
+
+<h2 id="analytics">Optional analytical columns<a class="self" href="#analytics" aria-label="link to this section">§</a></h2>
+
+<p>Add <code>--analytics</code> to either conversion or an existing-FGB build.
+<code>--chunk-rows auto</code> adapts the chunk height by default; an explicit
+positive size such as 4096 overrides it:</p>
+
+<pre><code>fgba convert cities.geojson --analytics --chunk-rows 4096 -o cities.a.fgb
+fgba build cities-metrics.fgb --analytics --chunk-rows 4096 -o cities-metrics.a.fgb</code></pre>
+
+<p>When property columns exist, this adds one kind-2
+<code>BODY_ANALYTICS</code> section with exact global statistics, per-chunk
+numeric/null zone maps and body offsets, and independent Arrow IPC property
+chunks. A property-free body gets no empty section. Ordinary builds remain
+unchanged, and neither the footer nor directory version changes. Query the
+result with <a href="analytics.html">native SQL and analytics</a>.</p>
 
 <h2 id="crs">CRS: WGS 84 lon/lat required<a class="self" href="#crs" aria-label="link to this section">§</a></h2>
 

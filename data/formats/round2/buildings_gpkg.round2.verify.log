@@ -1,0 +1,11 @@
+verify data/formats/a.fgb/buildings_gpkg.round2.a.fgb
+  body: 15705867 features, Unknown — OK
+  footer + directory: CRC verified — OK
+  band res 3: 18 cells, 15705867 features — OK
+  band res 5: 141 cells, 15705867 features — OK
+  band res 7: 1665 cells, 15705867 features — OK
+  band res 9: 19315 cells, 15705867 features — OK
+  band res 11: 87972 cells, 15705867 features — OK
+  analytics: 25 columns, 3835 chunks — OK
+  geometry metrics: 7 columns, 3835 chunks — OK
+OK: valid FGBA, 15705867 features, 5 band(s)

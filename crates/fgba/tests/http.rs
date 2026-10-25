@@ -195,3 +195,14 @@ fn scheme_restrictions_are_enforced() {
     assert!(fgba::HttpRangeReader::open("http://example.com/f.a.fgb").is_err());
     assert!(fgba::HttpRangeReader::open("no-scheme").is_err());
 }
+
+#[test]
+fn repeated_stats_reuses_the_cached_band_request() -> TestResult {
+    let port = serve(Mode::Ranges(vector_bytes()?))?;
+    let url = format!("http://127.0.0.1:{port}/cities_12.a.fgb");
+    let mut reader = Reader::open_url(&url)?;
+    assert_eq!(reader.stats([-180.0, -85.0, 180.0, 85.0], 2)?.total, 12);
+    assert_eq!(reader.stats([-10.0, 40.0, 10.0, 60.0], 2)?.total, 8);
+    assert_eq!(reader.into_inner().requests(), 4);
+    Ok(())
+}

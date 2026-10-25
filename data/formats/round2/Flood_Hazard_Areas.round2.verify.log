@@ -1,0 +1,10 @@
+verify data/formats/a.fgb/Flood_Hazard_Areas.round2.a.fgb
+  body: 361979 features, Unknown — OK
+  footer + directory: CRC verified — OK
+  band res 3: 35 cells, 361979 features — OK
+  band res 5: 271 cells, 361979 features — OK
+  band res 7: 2302 cells, 361979 features — OK
+  band res 9: 17939 cells, 361979 features — OK
+  analytics: 26 columns, 89 chunks — OK
+  geometry metrics: 7 columns, 89 chunks — OK
+OK: valid FGBA, 361979 features, 4 band(s)

@@ -1,0 +1,12 @@
+verify data/formats/a.fgb/buildings_geojson.round2.a.fgb
+  body: 24083188 features, Unknown — OK
+  footer + directory: CRC verified — OK
+  band res 2: 3 cells, 24083188 features — OK
+  band res 4: 9 cells, 24083188 features — OK
+  band res 6: 75 cells, 24083188 features — OK
+  band res 8: 928 cells, 24083188 features — OK
+  band res 10: 13497 cells, 24083188 features — OK
+  band res 12: 176170 cells, 24083188 features — OK
+  analytics: 4 columns, 5880 chunks — OK
+  geometry metrics: 7 columns, 5880 chunks — OK
+OK: valid FGBA, 24083188 features, 6 band(s)

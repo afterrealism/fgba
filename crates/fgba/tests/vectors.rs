@@ -339,3 +339,110 @@ fn ladder_spot_checks() {
     assert_eq!(ladder_resolution(1.0), 7);
     assert_eq!(ladder_resolution(0.2), 9);
 }
+
+#[test]
+fn switching_resolutions_replaces_the_cached_band() -> TestResult {
+    let mut writer = FgbWriter::create("cities", GeometryType::Point)?;
+    for i in 0..241 {
+        let lon = -175.0 + (i % 25) as f64 * 14.0;
+        let lat = -72.0 + (i / 25) as f64 * 16.0;
+        writer.add_feature_geom(Point(lon, lat), |_feat| {})?;
+    }
+    let mut body = Vec::new();
+    writer.write(&mut body)?;
+    let (file, report) = build(&body)?;
+    assert_eq!(report.bands, [2, 4]);
+
+    let world = [-180.0, -85.0, 180.0, 85.0];
+    let mut reader = Reader::open(Cursor::new(file))?;
+    let first = reader.query(world, 2)?;
+    let finer = reader.query(world, 4)?;
+    assert!(finer.len() > first.len());
+    assert_eq!(reader.query(world, 2)?, first);
+    Ok(())
+}
+
+// Regression (world-viewport covering undercount): a near-global viewport
+// like a global line dataset's own extent must match essentially every
+// occupied cell, not a handful. Before the complement fix, a ring covering
+// more than 50 percent of the sphere was read as its tiny complement
+// (61 cells at res 4 for a whole-earth rectangle).
+#[test]
+fn near_global_viewport_matches_all_features() -> TestResult {
+    let body = fgb_body()?;
+    let (file, _) = build(&body)?;
+    let mut reader = Reader::open(Cursor::new(&file))?;
+    // ~90% of the sphere, like the trails/tracks/footways extents.
+    let near_global = [-179.999, -79.9, 179.997, 82.5];
+    let stats = reader.stats(near_global, 2)?;
+    assert_eq!(
+        stats.total, 12,
+        "all 12 cities sit inside a near-world view"
+    );
+    // A viewport *smaller* than a hemisphere still uses the direct covering.
+    let regional = [-30.0, 40.0, 20.0, 60.0];
+    let regional_stats = reader.stats(regional, 2)?;
+    assert_eq!(regional_stats.total, 8, "Europe only");
+    Ok(())
+}
+
+/// Regression (build OOM): the streaming trailer build must produce exactly
+/// the same trailer bytes and report as the in-memory path.
+#[test]
+fn streaming_build_matches_in_memory_build() -> TestResult {
+    use fgba::BuildOptions;
+    use std::io::Cursor;
+    let body = fgb_body()?;
+    let (in_memory, in_report) = fgba::build_with_options(&body, &BuildOptions::default())?;
+    let (trailer, stream_report) = fgba::build_trailer_streaming(
+        Cursor::new(&body),
+        body.len() as u64,
+        &BuildOptions::default(),
+    )?;
+    let expected_trailer = &in_memory[body.len()..];
+    assert_eq!(trailer, expected_trailer, "trailer bytes must be identical");
+    assert_eq!(stream_report, in_report);
+    // And the streamed trailer assembles into a readable FGBA file.
+    let mut file = body.clone();
+    file.extend_from_slice(&trailer);
+    let mut reader = Reader::open(Cursor::new(&file))?;
+    let stats = reader.stats([-180.0, -85.0, 180.0, 85.0], 2)?;
+    assert_eq!(stats.total, 12);
+
+    let mut file_output = Vec::new();
+    let file_report = fgba::build_to_writer(
+        Cursor::new(&body),
+        body.len() as u64,
+        &BuildOptions::default(),
+        &mut file_output,
+    )?;
+    assert_eq!(file_report, in_report);
+    assert_eq!(file_output, in_memory);
+    Ok(())
+}
+
+#[test]
+fn streaming_build_rejects_wrong_body_len_before_output() -> TestResult {
+    let body = fgb_body()?;
+    for wrong_len in [body.len() as u64 - 1, body.len() as u64 + 1] {
+        let mut output = Vec::new();
+        let error = fgba::build_to_writer(
+            Cursor::new(&body),
+            wrong_len,
+            &fgba::BuildOptions::default(),
+            &mut output,
+        )
+        .err()
+        .ok_or("wrong body length unexpectedly succeeded")?;
+        let expected = format!(
+            "FlatGeobuf body terminal {} does not match supplied body length {wrong_len}",
+            body.len()
+        );
+        assert!(
+            matches!(error, Error::Format(message) if message == expected),
+            "wrong body length produced an unexpected error"
+        );
+        assert!(output.is_empty(), "writer received bytes before rejection");
+    }
+    Ok(())
+}

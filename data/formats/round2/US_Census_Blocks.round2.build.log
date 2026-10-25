@@ -1,0 +1,7 @@
+built data/formats/a.fgb/US_Census_Blocks.round2.a.fgb
+  features: 8180866 (0 skipped)
+  attribute columns: 12
+  bands: 3, 5, 7, 9, 11
+  trailer: 1964.6 MiB
+  total size: 13562.6 MiB
+  wall time: 64.11 s

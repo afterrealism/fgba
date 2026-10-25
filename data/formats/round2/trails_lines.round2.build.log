@@ -1,0 +1,7 @@
+built data/formats/a.fgb/trails_lines.round2.a.fgb
+  features: 15791189 (0 skipped)
+  attribute columns: 15
+  bands: 2, 4, 6, 8, 10, 12
+  trailer: 2092.8 MiB
+  total size: 8337.4 MiB
+  wall time: 59.78 s

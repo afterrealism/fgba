@@ -1,0 +1,7 @@
+built data/formats/a.fgb/buildings_gpkg.round2.a.fgb
+  features: 15705867 (0 skipped)
+  attribute columns: 25
+  bands: 3, 5, 7, 9, 11
+  trailer: 4281.2 MiB
+  total size: 10168.1 MiB
+  wall time: 42.62 s

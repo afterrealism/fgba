@@ -19,7 +19,7 @@ export function counters() {
 }
 
 // One range request; `span` is a Range value like "bytes=10-19" or "bytes=-32".
-async function range(url, span) {
+async function range(url, span, onRange) {
   const res = await fetch(url, { headers: { Range: span } });
   if (res.status !== 206) {
     throw new Error(`server answered ${res.status} to "Range: ${span}"; FGBA needs a host with range support (206, SPEC §9.2)`);
@@ -27,6 +27,7 @@ async function range(url, span) {
   const buf = await res.arrayBuffer();
   requests += 1;
   bytesRead += buf.byteLength;
+  onRange?.({ url, span, status: res.status, bytes: buf.byteLength, contentRange: res.headers.get("Content-Range") || "" });
   return { buf, contentRange: res.headers.get("Content-Range") || "" };
 }
 
@@ -43,8 +44,8 @@ function crc32(bytes) {
 // Phase 1: fetch the file's last 32 bytes (the footer — this doubles as the
 // range-support probe), then the directory, CRC-verified. Returns the band
 // table [{res, offset, size}] of every kind-1 section.
-export async function openDirectory(url) {
-  const { buf, contentRange } = await range(url, "bytes=-32");
+export async function openDirectory(url, onRange) {
+  const { buf, contentRange } = await range(url, "bytes=-32", onRange);
   const total = Number((/\/(\d+)$/.exec(contentRange) || [])[1]);
   if (!Number.isFinite(total) || total < 32) throw new Error(`unparseable Content-Range ${JSON.stringify(contentRange)}`);
   const f = new DataView(buf);
@@ -54,7 +55,7 @@ export async function openDirectory(url) {
   const crc = f.getUint32(24, true);
   if (dirSize < 1n || dirSize > (1n << 20n)) throw new Error(`directory size ${dirSize} out of bounds (SPEC §12)`);
   if (dirOffset + dirSize !== BigInt(total - 32)) throw new Error("directory does not end at the footer");
-  const { buf: dirBuf } = await range(url, `bytes=${dirOffset}-${dirOffset + dirSize - 1n}`);
+  const { buf: dirBuf } = await range(url, `bytes=${dirOffset}-${dirOffset + dirSize - 1n}`, onRange);
   if (crc32(new Uint8Array(dirBuf)) !== crc) throw new Error("directory CRC-32 mismatch");
   const dv = new DataView(dirBuf);
   if (dv.getUint8(0) !== 1) throw new Error(`directory version ${dv.getUint8(0)} (this demo reads v1)`);
@@ -72,10 +73,10 @@ export async function openDirectory(url) {
 }
 
 // Phase 2: fetch the deepest band within the cap, whole, and parse records.
-export async function loadBand(url, bands) {
+export async function loadBand(url, bands, onRange) {
   const band = bands.filter((b) => b.size <= BAND_CAP).sort((a, b) => b.res - a.res)[0];
   if (!band) throw new Error(`every band exceeds the ${BAND_CAP >> 20} MiB cap (SPEC §9.2)`);
-  const { buf } = await range(url, `bytes=${band.offset}-${band.offset + band.size - 1}`);
+  const { buf } = await range(url, `bytes=${band.offset}-${band.offset + band.size - 1}`, onRange);
   const dv = new DataView(buf);
   if (dv.getUint8(0) !== 1 || dv.getUint8(1) !== band.res) throw new Error("band header disagrees with the directory (SPEC §6)");
   const total = dv.getBigUint64(4, true);
@@ -104,22 +105,36 @@ export function findCell(ids, cell) {
 }
 
 // The occupied band records whose cells cover the viewport [w, s, e, n]
-// (overlapping containment, SPEC §9.4).
+// (overlapping containment, SPEC §9.4). Wide spherical rectangles can take a
+// lossy covering path in the pinned A5 implementation, so split them into
+// narrower panels and union by cell ID. Narrow queries keep the original path.
 export function queryBand(band, view) {
-  const [w, s, e, n] = view;
-  const ring = [
-    [w, s],
-    [e, s],
-    [e, n],
-    [w, n],
-  ];
-  const covering = uncompact(polygonToCells(ring, band.res, { containment: "overlapping" }));
-  const hits = [];
-  for (const cell of covering) {
-    const i = findCell(band.ids, cell);
-    if (i >= 0) hits.push({ cell: band.ids[i], count: band.counts[i] });
+  const views = [];
+  const split = (w, s, e, n) => {
+    if (e - w <= 90) {
+      views.push([w, s, e, n]);
+      return;
+    }
+    const middle = (w + e) / 2;
+    split(w, s, middle, n);
+    split(middle, s, e, n);
+  };
+  split(...view);
+  const hits = new Map();
+  for (const [w, s, e, n] of views) {
+    const ring = [
+      [w, s],
+      [e, s],
+      [e, n],
+      [w, n],
+    ];
+    const covering = uncompact(polygonToCells(ring, band.res, { containment: "overlapping" }));
+    for (const cell of covering) {
+      const i = findCell(band.ids, cell);
+      if (i >= 0) hits.set(cell.toString(), { cell: band.ids[i], count: band.counts[i] });
+    }
   }
-  return hits;
+  return [...hits.values()];
 }
 
 // ---------- browser UI (absent under node — the headless test drives the above) ----------
@@ -167,7 +182,10 @@ async function run(url) {
 
 if (typeof document !== "undefined") {
   const input = document.getElementById("url");
-  input.value = new URLSearchParams(location.search).get("url") || "../../../../testdata/cities_12.a.fgb";
-  document.getElementById("load").addEventListener("click", () => run(input.value).catch((e) => say(String(e), true)));
-  run(input.value).catch((e) => say(String(e), true));
+  // Other browser examples can import the parser without starting this page's UI.
+  if (input) {
+    input.value = new URLSearchParams(location.search).get("url") || "../../../../testdata/cities_12.a.fgb";
+    document.getElementById("load").addEventListener("click", () => run(input.value).catch((e) => say(String(e), true)));
+    run(input.value).catch((e) => say(String(e), true));
+  }
 }

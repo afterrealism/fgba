@@ -1,0 +1,7 @@
+built data/formats/a.fgb/buildings_geojson.round2.a.fgb
+  features: 24083188 (0 skipped)
+  attribute columns: 4
+  bands: 2, 4, 6, 8, 10, 12
+  trailer: 2001.6 MiB
+  total size: 7227.6 MiB
+  wall time: 91.89 s

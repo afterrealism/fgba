@@ -1,0 +1,51 @@
+dataset Flood_Hazard_Areas extent -170.84840210923284 -14.375160286190692 145.83219414839436 66.59159561923292
+  Flood_Hazard_Areas/afgba-sql/full_count
+  Flood_Hazard_Areas/afgba-sql/geom_agg
+  Flood_Hazard_Areas/afgba-sql/attr_group
+  Flood_Hazard_Areas/afgba-sql/bbox_count
+dataset Lakes extent -179.9999999999999 -55.86513888888899 179.99999999999903 83.57595062255876
+  Lakes/afgba-sql/full_count
+  Lakes/afgba-sql/geom_agg
+  Lakes/afgba-sql/attr_group
+  Lakes/afgba-sql/bbox_count
+dataset Land extent -180 -90 180 83.6651126
+  Land/afgba-sql/full_count
+  Land/afgba-sql/geom_agg
+  Land/afgba-sql/attr_group
+  Land/afgba-sql/bbox_count
+dataset US_Census_Blocks extent -179.231086 -14.601813 179.85968107125612 71.439786
+  US_Census_Blocks/afgba-sql/full_count
+  US_Census_Blocks/afgba-sql/geom_agg
+  US_Census_Blocks/afgba-sql/attr_group
+  US_Census_Blocks/afgba-sql/bbox_count
+dataset buildings_geojson extent 13.747668235289513 48.748526302937904 25.00065902114089 55.0001584464859
+  buildings_geojson/afgba-sql/full_count
+  buildings_geojson/afgba-sql/geom_agg
+  buildings_geojson/afgba-sql/attr_group
+  buildings_geojson/afgba-sql/bbox_count
+dataset buildings_gpkg extent 68.5274064 7.184114 97.1975648 35.4756352
+  buildings_gpkg/afgba-sql/full_count
+  buildings_gpkg/afgba-sql/geom_agg
+  buildings_gpkg/afgba-sql/attr_group
+  buildings_gpkg/afgba-sql/bbox_count
+dataset footways_lines extent -179.9997881 -77.8591803 179.8734858 80.7998661
+  footways_lines/afgba-sql/full_count
+  footways_lines/afgba-sql/geom_agg
+  footways_lines/afgba-sql/attr_group
+  footways_lines/afgba-sql/bbox_count
+dataset highways_lines extent -180 -85.0511284 180 82.5254024
+  highways_lines/afgba-sql/full_count
+  highways_lines/afgba-sql/geom_agg
+  highways_lines/afgba-sql/attr_group
+  highways_lines/afgba-sql/bbox_count
+dataset tracks_lines extent -179.9753948 -79.8149997 180 82.5244486
+  tracks_lines/afgba-sql/full_count
+  tracks_lines/afgba-sql/geom_agg
+  tracks_lines/afgba-sql/attr_group
+  tracks_lines/afgba-sql/bbox_count
+dataset trails_lines extent -179.9990559 -79.7764677 179.9971833 82.4985836
+  trails_lines/afgba-sql/full_count
+  trails_lines/afgba-sql/geom_agg
+  trails_lines/afgba-sql/attr_group
+  trails_lines/afgba-sql/bbox_count
+wrote data/formats/round2/results.jsonl

@@ -6,16 +6,19 @@
 
 mod bench;
 mod convert;
+mod query;
 mod serve;
 
+use arrow_ipc::reader::FileReader;
+use arrow_schema::DataType;
 use clap::{Parser, Subcommand};
 use flatgeobuf::FgbReader;
-use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use fgba::{Error as FgbaError, Reader};
+use fgba::{BodyAnalytics, BuildOptions, Error as FgbaError, GeometryMetrics, Reader};
 
 /// CLI entry point: dispatch and turn errors into one readable line + exit 1.
 fn main() -> ExitCode {
@@ -40,6 +43,25 @@ struct Cli {
     cmd: Cmd,
 }
 
+fn parse_chunk_rows(value: &str) -> Result<u32, String> {
+    if value == "auto" {
+        return Ok(0);
+    }
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|&rows| rows > 0)
+        .ok_or_else(|| "expected 'auto' or a positive integer".to_string())
+}
+
+fn parse_scan_threads(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|&threads| threads > 0)
+        .ok_or_else(|| "expected a positive integer".to_string())
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// Append an FGBA aggregate trailer to a FlatGeobuf file
@@ -49,14 +71,38 @@ enum Cmd {
         /// Output file (default: input name ending in .a.fgb)
         #[arg(short, long)]
         out: Option<PathBuf>,
+        /// Emit analytical property columns and statistics
+        #[arg(long)]
+        analytics: bool,
+        /// Emit derived geometry metrics (also enables --analytics)
+        #[arg(long, conflicts_with = "no_geometry_metrics")]
+        geometry_metrics: bool,
+        /// Do not emit geometry metrics when --analytics is present
+        #[arg(long)]
+        no_geometry_metrics: bool,
+        /// Rows per analytical chunk, or 'auto' to adapt to the feature count
+        #[arg(long, default_value = "auto", value_parser = parse_chunk_rows)]
+        chunk_rows: u32,
     },
-    /// Convert GeoJSON, CSV/TSV, Shapefile or FlatGeobuf into FGBA
+    /// Convert GeoJSON, CSV/TSV, Shapefile or FlatGeobuf into FGBA with properties preserved; GeoParquet/GeoPackage unsupported
     Convert {
         /// Input file (.geojson/.json, .csv/.tsv, .shp, .fgb)
         input: PathBuf,
         /// Output FGBA file
         #[arg(short, long)]
         out: PathBuf,
+        /// Emit analytical property columns and statistics
+        #[arg(long)]
+        analytics: bool,
+        /// Emit derived geometry metrics (also enables --analytics)
+        #[arg(long, conflicts_with = "no_geometry_metrics")]
+        geometry_metrics: bool,
+        /// Do not emit geometry metrics when --analytics is present
+        #[arg(long)]
+        no_geometry_metrics: bool,
+        /// Rows per analytical chunk, or 'auto' to adapt to the feature count
+        #[arg(long, default_value = "auto", value_parser = parse_chunk_rows)]
+        chunk_rows: u32,
     },
     /// Show body header, aggregate bands and sizes of a file
     Info {
@@ -76,6 +122,22 @@ enum Cmd {
         /// A5 band resolution (default: the file's deepest band)
         #[arg(long)]
         res: Option<u8>,
+    },
+    /// Execute native read-only SQL over an FGB or FGBA file
+    Query {
+        /// Input FlatGeobuf/FGBA file
+        input: PathBuf,
+        /// SQL using features, a5_band_<res>, a5_viewport_approx, or attribute_stats
+        sql: String,
+        /// A5 resolution for --bbox (default: deepest band)
+        #[arg(long)]
+        res: Option<u8>,
+        /// Covering bbox as minx,miny,maxx,maxy
+        #[arg(long, allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// DataFusion target partitions for analytical chunk scans
+        #[arg(long, value_parser = parse_scan_threads)]
+        scan_threads: Option<usize>,
     },
     /// Structurally verify the footer, directory and every band
     Verify {
@@ -100,12 +162,55 @@ enum Cmd {
     },
 }
 
+fn analytics_options(
+    analytics: bool,
+    geometry_metrics: bool,
+    no_geometry_metrics: bool,
+    chunk_rows: u32,
+) -> BuildOptions {
+    let analytics = analytics || geometry_metrics;
+    BuildOptions {
+        analytics,
+        geometry_metrics: analytics && !no_geometry_metrics,
+        chunk_rows,
+    }
+}
+
 fn run() -> Result<(), String> {
     match Cli::parse().cmd {
-        Cmd::Build { input, out } => cmd_build(&input, out.as_deref()),
-        Cmd::Convert { input, out } => convert::run(&input, &out),
+        Cmd::Build {
+            input,
+            out,
+            analytics,
+            geometry_metrics,
+            no_geometry_metrics,
+            chunk_rows,
+        } => cmd_build(
+            &input,
+            out.as_deref(),
+            &analytics_options(analytics, geometry_metrics, no_geometry_metrics, chunk_rows),
+        ),
+        Cmd::Convert {
+            input,
+            out,
+            analytics,
+            geometry_metrics,
+            no_geometry_metrics,
+            chunk_rows,
+        } => convert::run(
+            &input,
+            &out,
+            &analytics_options(analytics, geometry_metrics, no_geometry_metrics, chunk_rows),
+        ),
         Cmd::Info { input, url } => cmd_info(&source(input, url)?),
         Cmd::Stats { input, bbox, res } => cmd_stats(&input, &bbox, res),
+        Cmd::Query {
+            input,
+            sql,
+            res,
+            bbox,
+            scan_threads,
+        } => query::run(&input, &sql, res, bbox.as_deref(), scan_threads),
         Cmd::Verify { input } => cmd_verify(&input),
         Cmd::Serve { path, port } => serve::run(&path, port),
         Cmd::Bench { input, url } => bench::run(&source(input, url)?),
@@ -140,13 +245,8 @@ impl Source {
 
 // ---------- build ----------
 
-fn cmd_build(input: &Path, out: Option<&Path>) -> Result<(), String> {
+fn cmd_build(input: &Path, out: Option<&Path>, options: &BuildOptions) -> Result<(), String> {
     let label = input.display().to_string();
-    let bytes = std::fs::read(input).map_err(|e| format!("{label}: {e}"))?;
-    let (body, had_trailer) = strip_existing_trailer(bytes)?;
-    if had_trailer {
-        eprintln!("{label}: input already has an FGBA trailer; rebuilding from its body");
-    }
     let default;
     let out = match out {
         Some(p) => p,
@@ -156,11 +256,67 @@ fn cmd_build(input: &Path, out: Option<&Path>) -> Result<(), String> {
         }
     };
     let t0 = Instant::now();
-    let (report, total) = build_to_file_at(&body, out)?;
+    let (report, total) =
+        build_streaming_to_file(input, out, options).map_err(|e| format!("{label}: {e}"))?;
     let wall = t0.elapsed();
     println!("built {}", out.display());
     print_report(&report, total, wall);
     Ok(())
+}
+
+/// Where the FlatGeobuf body of `input` ends: the body length from an
+/// existing FGBA trailer, or the full file length for a plain FlatGeobuf.
+/// Never loads the file into memory.
+fn body_length(input: &Path) -> Result<(u64, bool), String> {
+    let mut file = std::fs::File::open(input).map_err(|e| e.to_string())?;
+    let file_len = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut probe = std::io::BufReader::new(&mut file);
+    match fgba::Reader::open(&mut probe) {
+        Ok(reader) => Ok((reader.body_len(), true)),
+        Err(FgbaError::NotFgba) => Ok((file_len, false)),
+        Err(e) => Err(format!("input has a corrupt FGBA trailer: {e}")),
+    }
+}
+
+/// Streaming build for large files: validate and encode through seekable
+/// passes, then stream the body and spooled sections directly into the atomic
+/// output temporary file. No complete section or trailer is retained in RAM.
+fn build_streaming_to_file(
+    input: &Path,
+    out: &Path,
+    options: &BuildOptions,
+) -> Result<(fgba::BuildReport, u64), String> {
+    let (body_len, had_trailer) = body_length(input)?;
+    if had_trailer {
+        eprintln!("input already has an FGBA trailer; rebuilding from its body");
+    }
+    let src = std::fs::File::open(input).map_err(|e| e.to_string())?;
+    let report = write_atomic_with(out, |dst| {
+        fgba::build_to_writer(src, body_len, options, dst)
+            .map_err(|error| std::io::Error::other(format!("cannot build trailer: {error}")))
+    })
+    .map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+    let total = body_len + report.trailer_bytes as u64;
+    Ok((report, total))
+}
+
+/// Copy exactly `body_len` source bytes, append `trailer`, and flush.
+#[cfg(test)]
+fn copy_body_and_trailer(
+    src: impl Read,
+    body_len: u64,
+    trailer: &[u8],
+    dst: &mut dyn Write,
+) -> std::io::Result<()> {
+    let copied = std::io::copy(&mut src.take(body_len), dst)?;
+    if copied != body_len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            format!("copied {copied} body bytes, expected exactly {body_len}"),
+        ));
+    }
+    dst.write_all(trailer)?;
+    dst.flush()
 }
 
 /// Build the trailer for `body` and write the complete FGBA file to `out`,
@@ -168,8 +324,10 @@ fn cmd_build(input: &Path, out: Option<&Path>) -> Result<(), String> {
 pub(crate) fn build_to_file_at(
     body: &[u8],
     out: &Path,
+    options: &BuildOptions,
 ) -> Result<(fgba::BuildReport, u64), String> {
-    let (file, report) = fgba::build(body).map_err(|e| format!("cannot build trailer: {e}"))?;
+    let (file, report) = fgba::build_with_options(body, options)
+        .map_err(|e| format!("cannot build trailer: {e}"))?;
     let total = file.len() as u64;
     write_atomic(out, &file).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
     Ok((report, total))
@@ -181,6 +339,11 @@ pub(crate) fn print_report(report: &fgba::BuildReport, total: u64, wall: Duratio
         "  features: {} ({} skipped)",
         report.features, report.skipped
     );
+    if report.attribute_columns > 0 {
+        println!("  attribute columns: {}", report.attribute_columns);
+    } else if report.analytics_requested {
+        println!("  analytics: no property columns");
+    }
     println!(
         "  bands: {}",
         report
@@ -443,21 +606,46 @@ fn cmd_verify(input: &Path) -> Result<(), String> {
                             b.cells.len(),
                             b.total
                         );
-                        if let Some(features) = body_features {
-                            if b.total != features {
-                                let msg = format!(
-                                    "band res {}: total {} != body features_count {features}",
-                                    band.res, b.total
-                                );
-                                println!("  FAIL {msg}");
-                                failures.push(msg);
-                            }
-                        }
                     }
                     Err(e) => {
                         println!("  FAIL band res {}: {e}", band.res);
                         failures.push(format!("band res {}: {e}", band.res));
                     }
+                }
+            }
+            match reader.read_body_analytics_metadata() {
+                Ok(Some(analytics)) => match validate_analytics(&mut reader, &analytics) {
+                    Ok(()) => println!(
+                        "  analytics: {} columns, {} chunks — OK",
+                        analytics.column_count, analytics.chunk_count
+                    ),
+                    Err(error) => {
+                        println!("  FAIL analytics: {error}");
+                        failures.push(format!("analytics: {error}"));
+                    }
+                },
+                Ok(None) => {}
+                Err(error) => {
+                    println!("  FAIL analytics: {error}");
+                    failures.push(format!("analytics: {error}"));
+                }
+            }
+            match reader.read_geometry_metrics_metadata() {
+                Ok(Some(metrics)) => match validate_geometry_metrics(&mut reader, &metrics) {
+                    Ok(()) => println!(
+                        "  geometry metrics: {} columns, {} chunks — OK",
+                        metrics.columns.len(),
+                        metrics.chunk_count
+                    ),
+                    Err(error) => {
+                        println!("  FAIL geometry metrics: {error}");
+                        failures.push(format!("geometry metrics: {error}"));
+                    }
+                },
+                Ok(None) => {}
+                Err(error) => {
+                    println!("  FAIL geometry metrics: {error}");
+                    failures.push(format!("geometry metrics: {error}"));
                 }
             }
             if failures.is_empty() {
@@ -485,14 +673,149 @@ fn cmd_verify(input: &Path) -> Result<(), String> {
     }
 }
 
+/// Validate every independent Arrow IPC file against its column/chunk metadata.
+fn validate_analytics<R: Read + Seek>(
+    reader: &mut Reader<R>,
+    analytics: &BodyAnalytics,
+) -> Result<(), String> {
+    for column in &analytics.columns {
+        let identity = column.descriptor.column_index;
+        let expected_type = fgba::analytics::arrow_data_type(column.descriptor.fgb_type)
+            .map_err(|error| format!("column {identity}: {error}"))?;
+        for chunk_index in 0..analytics.chunk_count {
+            let context = format!("column {identity}, chunk {chunk_index}");
+            let chunk = reader
+                .read_arrow_chunk_with_metadata(analytics, identity, chunk_index)
+                .map_err(|error| format!("{context}: {error}"))?;
+            let expected_rows = analytics
+                .chunk_row_count(chunk_index)
+                .ok_or_else(|| format!("{context}: chunk row count is unavailable"))?;
+            validate_arrow_ipc(
+                chunk.bytes,
+                &column.name,
+                &expected_type,
+                column.nullable,
+                expected_rows,
+                &context,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate every kind-3 Arrow IPC file against the shared chunk grid.
+fn validate_geometry_metrics<R: Read + Seek>(
+    reader: &mut Reader<R>,
+    metrics: &GeometryMetrics,
+) -> Result<(), String> {
+    for column in &metrics.columns {
+        let identity = column.descriptor.metric_id;
+        let name = fgba::geom_analytics::metric_name(identity)
+            .ok_or_else(|| format!("metric {identity}: unknown metric ID"))?;
+        let expected_type = fgba::geom_analytics::metric_data_type(identity)
+            .map_err(|error| format!("metric {identity}: {error}"))?;
+        for chunk_index in 0..metrics.chunk_count {
+            let context = format!("metric {identity}, chunk {chunk_index}");
+            let chunk = reader
+                .read_geometry_arrow_chunk_with_metadata(metrics, identity, chunk_index)
+                .map_err(|error| format!("{context}: {error}"))?;
+            let expected_rows = metrics
+                .chunk_row_count(chunk_index)
+                .ok_or_else(|| format!("{context}: chunk row count is unavailable"))?;
+            validate_arrow_ipc(
+                chunk.bytes,
+                name,
+                &expected_type,
+                true,
+                expected_rows,
+                &context,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_arrow_ipc(
+    bytes: Vec<u8>,
+    expected_name: &str,
+    expected_type: &DataType,
+    expected_nullable: bool,
+    expected_rows: u32,
+    context: &str,
+) -> Result<(), String> {
+    let ipc = FileReader::try_new(Cursor::new(bytes), None)
+        .map_err(|error| format!("{context}: malformed Arrow IPC: {error}"))?;
+    if ipc.schema().fields().len() != 1 || ipc.num_batches() != 1 {
+        return Err(format!("{context}: expected one field and one RecordBatch"));
+    }
+    let schema = ipc.schema();
+    let field = &schema.fields()[0];
+    if field.name() != expected_name
+        || field.data_type() != expected_type
+        || field.is_nullable() != expected_nullable
+    {
+        return Err(format!(
+            "{context}: Arrow schema disagrees with the section"
+        ));
+    }
+    let batches = ipc
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| format!("{context}: cannot decode Arrow IPC: {error}"))?;
+    if batches.len() != 1 || batches[0].num_columns() != 1 {
+        return Err(format!("{context}: expected exactly one RecordBatch"));
+    }
+    if batches[0].num_rows() != expected_rows as usize {
+        return Err(format!(
+            "{context}: Arrow rows {} != expected {expected_rows}",
+            batches[0].num_rows()
+        ));
+    }
+    Ok(())
+}
+
 // ---------- shared helpers ----------
 
 /// Write `bytes` to `path` atomically: same-directory temp file + rename.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut tmp_name = path.as_os_str().to_owned();
-    tmp_name.push(format!(".tmp-{}", std::process::id()));
-    let tmp = PathBuf::from(tmp_name);
-    let result = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+    write_atomic_with(path, |dst| dst.write_all(bytes))
+}
+
+/// Write to a unique same-directory temporary file, then close it and rename
+/// it over `path`. Any error removes the temporary file and leaves `path` as-is.
+fn write_atomic_with<T>(
+    path: &Path,
+    write: impl FnOnce(&mut dyn Write) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+    let (tmp, file) = loop {
+        let mut tmp_name = path.as_os_str().to_owned();
+        tmp_name.push(format!(
+            ".tmp-{}-{}",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        let tmp = PathBuf::from(tmp_name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    };
+
+    let result = (|| {
+        let mut dst = std::io::BufWriter::new(file);
+        let value = write(&mut dst)?;
+        dst.flush()?;
+        drop(dst);
+        std::fs::rename(&tmp, path)?;
+        Ok(value)
+    })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -519,5 +842,229 @@ pub(crate) fn fmt_duration(d: Duration) -> String {
         format!("{:.2} ms", secs * 1e3)
     } else {
         format!("{:.2} µs", secs * 1e6)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        copy_body_and_trailer, validate_analytics, validate_geometry_metrics, write_atomic_with,
+    };
+    use fgba::{BuildOptions, Reader};
+    use std::io::{Cursor, Read, Seek, Write};
+    use std::ops::Range;
+    use std::path::{Path, PathBuf};
+
+    type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> std::io::Result<Self> {
+            let path = std::env::temp_dir()
+                .join(format!("fgba-cli-atomic-write-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path)?;
+            Ok(Self(path))
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct MetadataReadMonitor<R> {
+        inner: R,
+        metadata_ranges: Vec<Range<u64>>,
+        metadata_reads: usize,
+    }
+
+    impl<R: Read + Seek> Read for MetadataReadMonitor<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let start = self.inner.stream_position()?;
+            let count = self.inner.read(buf)?;
+            let end = start + count as u64;
+            if count > 0
+                && self
+                    .metadata_ranges
+                    .iter()
+                    .any(|range| start < range.end && range.start < end)
+            {
+                self.metadata_reads += 1;
+            }
+            Ok(count)
+        }
+    }
+
+    impl<R: Seek> Seek for MetadataReadMonitor<R> {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("injected copy failure"))
+        }
+    }
+
+    struct FailingWriter<'a> {
+        dst: &'a mut dyn Write,
+        writes_before_failure: usize,
+        fail_flush: bool,
+    }
+
+    impl Write for FailingWriter<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.writes_before_failure == 0 {
+                return Err(std::io::Error::other("injected write failure"));
+            }
+            let allowed = buf.len().min(self.writes_before_failure);
+            let written = self.dst.write(&buf[..allowed])?;
+            self.writes_before_failure -= written;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                Err(std::io::Error::other("injected flush failure"))
+            } else {
+                self.dst.flush()
+            }
+        }
+    }
+
+    fn assert_atomic_failure(
+        dir: &Path,
+        write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+    ) -> TestResult<std::io::Error> {
+        let out = dir.join("out.fgb");
+        let original = b"pre-existing output";
+        std::fs::write(&out, original)?;
+        let error = write_atomic_with(&out, write)
+            .err()
+            .ok_or("atomic write unexpectedly succeeded")?;
+        assert_eq!(std::fs::read(&out)?, original);
+        let entries = std::fs::read_dir(dir)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        assert_eq!(
+            entries,
+            vec![std::ffi::OsString::from("out.fgb")],
+            "temporary artifacts were not cleaned up"
+        );
+        Ok(error)
+    }
+
+    #[test]
+    fn verify_validators_use_loaded_metadata() -> TestResult {
+        let vector = include_bytes!("../tests/data/cities_12.a.fgb");
+        let body_len = Reader::open(Cursor::new(vector))?.body_len() as usize;
+        let (file, _) = fgba::build_with_options(
+            &vector[..body_len],
+            &BuildOptions {
+                analytics: true,
+                geometry_metrics: true,
+                chunk_rows: 2,
+            },
+        )?;
+        let mut loaded = Reader::open(Cursor::new(file.as_slice()))?;
+        let analytics = loaded
+            .read_body_analytics_metadata()?
+            .ok_or("missing BODY_ANALYTICS")?;
+        let metrics = loaded
+            .read_geometry_metrics_metadata()?
+            .ok_or("missing GEOMETRY_METRICS")?;
+        let analytics_payload = analytics
+            .columns
+            .first()
+            .and_then(|column| column.arrow_offsets.first())
+            .copied()
+            .ok_or("missing analytics Arrow payload")?;
+        let geometry_payload = metrics
+            .columns
+            .first()
+            .and_then(|column| column.arrow_offsets.first())
+            .copied()
+            .ok_or("missing geometry Arrow payload")?;
+        let monitored = MetadataReadMonitor {
+            inner: Cursor::new(file.as_slice()),
+            metadata_ranges: vec![
+                analytics.section_start..analytics_payload,
+                metrics.section_start..geometry_payload,
+            ],
+            metadata_reads: 0,
+        };
+
+        // Use a fresh reader with no cached metadata. Any convenience-method
+        // metadata lookup would be observed in the monitored section ranges.
+        let mut reader = Reader::open(monitored)?;
+        validate_analytics(&mut reader, &analytics)?;
+        validate_geometry_metrics(&mut reader, &metrics)?;
+        let monitored = reader.into_inner();
+        assert_eq!(
+            monitored.metadata_reads, 0,
+            "verification reloaded analytical metadata"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn streaming_atomic_failures_preserve_existing_output() -> TestResult {
+        let tmp = TestDir::new()?;
+        let body = b"body";
+
+        // A source error after a partial copy cannot replace the output.
+        assert_atomic_failure(&tmp.0, |dst| {
+            let src = Cursor::new(&body[..]).chain(FailingReader);
+            copy_body_and_trailer(src, 8, b"trailer", dst)
+        })?;
+
+        // A trailer write error after the complete body cannot replace it.
+        assert_atomic_failure(&tmp.0, |dst| {
+            let mut failing = FailingWriter {
+                dst,
+                writes_before_failure: body.len(),
+                fail_flush: false,
+            };
+            copy_body_and_trailer(
+                Cursor::new(&body[..]),
+                body.len() as u64,
+                b"trailer",
+                &mut failing,
+            )
+        })?;
+
+        // A flush error after all bytes were accepted cannot replace it.
+        assert_atomic_failure(&tmp.0, |dst| {
+            let mut failing = FailingWriter {
+                dst,
+                writes_before_failure: usize::MAX,
+                fail_flush: true,
+            };
+            copy_body_and_trailer(
+                Cursor::new(&body[..]),
+                body.len() as u64,
+                b"trailer",
+                &mut failing,
+            )
+        })?;
+
+        // EOF before the exact expected body length is also an error.
+        let error = assert_atomic_failure(&tmp.0, |dst| {
+            copy_body_and_trailer(
+                Cursor::new(&body[..]),
+                body.len() as u64 + 1,
+                b"trailer",
+                dst,
+            )
+        })?;
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+        assert!(error.to_string().contains("expected exactly 5"));
+        Ok(())
     }
 }
