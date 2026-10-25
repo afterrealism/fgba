@@ -1,0 +1,15 @@
+{
+  "name": "fgba-s3-range-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A local S3-style object browser for streaming and visualizing FGBA vector data.",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test server.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

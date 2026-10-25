@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Upload vector files, convert them to FGBA with adjustable analytics settings, visualize datasets, and run local read-only SQL.">
+  <title>FGBA Range Lab</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="importmap">
+    { "imports": { "a5-js": "/a5.js" } }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#dataset-title">Skip to dataset</a>
+
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-cube" viewBox="0 0 24 24">
+      <path d="m4 7 8-4 8 4v10l-8 4-8-4Z"/><path d="m4 7 8 4 8-4M12 11v10"/>
+    </symbol>
+    <symbol id="icon-bucket" viewBox="0 0 24 24">
+      <path d="M5 8h14l-1.5 12h-11Z"/><path d="M8 8V6a4 4 0 0 1 8 0v2M4 8h16"/>
+    </symbol>
+    <symbol id="icon-file" viewBox="0 0 24 24">
+      <path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h4M9 13h6M9 17h4"/>
+    </symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24">
+      <path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.8-1L20 12M4 12l2.1 5a7 7 0 0 0 11.8-1"/>
+    </symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24">
+      <path d="M5 12h14M14 7l5 5-5 5"/>
+    </symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14"/>
+    </symbol>
+    <symbol id="icon-minus" viewBox="0 0 24 24">
+      <path d="M5 12h14"/>
+    </symbol>
+    <symbol id="icon-fit" viewBox="0 0 24 24">
+      <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>
+    </symbol>
+    <symbol id="icon-upload" viewBox="0 0 24 24">
+      <path d="M12 16V4m-5 5 5-5 5 5M5 15v5h14v-5"/>
+    </symbol>
+    <symbol id="icon-query" viewBox="0 0 24 24">
+      <path d="M4 5h16v14H4ZM4 10h16M9 10v9M4 15h16"/>
+    </symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24">
+      <path d="m6 6 12 12M18 6 6 18"/>
+    </symbol>
+  </svg>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" aria-hidden="true"><use href="#icon-cube"/></svg>
+      <h1>FGBA <span>Range Lab</span></h1>
+      <p>S3-style vector streaming</p>
+    </div>
+    <div class="top-actions">
+      <button id="upload-open" class="button secondary" type="button"><svg aria-hidden="true"><use href="#icon-upload"/></svg>Upload vector</button>
+      <button id="sql-open" class="button secondary" type="button" disabled><svg aria-hidden="true"><use href="#icon-query"/></svg>SQL query</button>
+      <div class="local-state" title="This server is bound to your machine; uploads are stored in the local uploads bucket">
+        <span class="status-light" aria-hidden="true"></span>
+        LOCAL / WORKSPACE
+      </div>
+    </div>
+  </header>
+
+  <main class="console">
+    <aside class="sidebar" aria-label="Object storage browser">
+      <section class="bucket-browser" aria-labelledby="buckets-title">
+        <div class="section-heading">
+          <h2 id="buckets-title">Buckets</h2>
+          <output id="bucket-count" aria-label="Bucket count">—</output>
+        </div>
+        <div id="bucket-list" class="bucket-list">
+          <div class="list-skeleton" aria-label="Loading buckets"><span></span><span></span></div>
+        </div>
+      </section>
+
+      <section class="object-browser" aria-labelledby="objects-title">
+        <div class="section-heading">
+          <h2 id="objects-title">Objects</h2>
+          <button id="refresh" class="icon-button" type="button" aria-label="Reload objects and dataset" title="Reload objects and dataset" disabled>
+            <svg aria-hidden="true"><use href="#icon-refresh"/></svg>
+          </button>
+        </div>
+        <p id="object-path" class="object-path">Waiting for a bucket</p>
+        <div id="object-list" class="object-list"></div>
+      </section>
+
+      <section class="read-path" aria-labelledby="read-path-title">
+        <h2 id="read-path-title">Read path</h2>
+        <ol>
+          <li><span>Footer</span><b>32 B</b></li>
+          <li><span>Directory</span><b>CRC checked</b></li>
+          <li><span>Aggregate band</span><b>One range</b></li>
+        </ol>
+        <p>No full-file download. No cloud account.</p>
+      </section>
+    </aside>
+
+    <section class="stage" aria-label="Vector dataset visualization">
+      <div class="dataset-bar">
+        <div class="dataset-name">
+          <h2 id="dataset-title">Waiting for object storage</h2>
+          <p id="dataset-uri">Loading the local bucket…</p>
+          <p class="dataset-source">Source: <a id="dataset-source-link" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">FGBA test vector</a></p>
+        </div>
+        <dl class="dataset-stats">
+          <div><dt id="feature-label">Est. features</dt><dd id="feature-count">—</dd></div>
+          <div><dt id="cell-label">Visible cells</dt><dd id="cell-count">—</dd></div>
+          <div><dt>Transferred</dt><dd id="byte-count">—</dd></div>
+        </dl>
+      </div>
+
+      <div id="map-shell" class="map-shell" aria-busy="true">
+        <div class="map-meta" aria-hidden="true">
+          <span>WGS 84 / DECK.GL</span>
+          <span>Z <output id="zoom-value">0.0</output> · <output id="resolution-label">A5 RES</output> <output id="resolution">—</output></span>
+        </div>
+        <div id="deck-map" role="group" aria-label="Zoomable A5 vector aggregate map"></div>
+        <div class="map-controls" aria-label="Map zoom controls">
+          <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in" title="Zoom in (+)" disabled><svg aria-hidden="true"><use href="#icon-plus"/></svg></button>
+          <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out" title="Zoom out (-)" disabled><svg aria-hidden="true"><use href="#icon-minus"/></svg></button>
+          <button id="fit-data" class="icon-button" type="button" aria-label="Fit all dataset features" title="Fit all dataset features" disabled><svg aria-hidden="true"><use href="#icon-fit"/></svg></button>
+        </div>
+        <output id="band-status" class="band-status" hidden>Loading band…</output>
+
+        <div id="map-state" class="map-state" role="status">
+          <div class="loading-grid" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+          <h3>Pulling vector object</h3>
+          <p id="map-state-text">Requesting the FGBA footer…</p>
+          <button id="retry" class="button" type="button" hidden>Try again</button>
+        </div>
+
+        <div class="map-footer">
+          <div class="legend" aria-label="Feature count color scale">
+            <span id="legend-min">Lower</span>
+            <span class="legend-ramp" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+            <span id="legend-max">Higher</span>
+          </div>
+          <p id="selected-cell" aria-live="polite">Select a cell to inspect its count</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="ledger" aria-labelledby="ledger-title">
+      <div class="ledger-head">
+        <div>
+          <h2 id="ledger-title">Range activity</h2>
+          <p id="request-summary" aria-live="polite">Waiting for the first request</p>
+        </div>
+        <span class="protocol">RANGE / BYTES</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <caption class="sr-only">HTTP range requests made while reading the selected FGBA object</caption>
+          <thead><tr><th scope="col">Step</th><th scope="col">Requested range</th><th scope="col">Response</th><th scope="col">Payload</th></tr></thead>
+          <tbody id="request-list">
+            <tr class="empty-row"><td colspan="4">Requests appear here as the object is read.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="upload-dialog" class="workspace-dialog" aria-labelledby="upload-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="upload-title">Import vector data</h2>
+        <p>Convert a local file into a range-readable FGBA object.</p>
+      </div>
+      <button id="upload-close" class="icon-button" type="button" aria-label="Close import dialog"><svg aria-hidden="true"><use href="#icon-close"/></svg></button>
+    </div>
+    <form id="upload-form" class="dialog-body">
+      <label id="drop-zone" class="drop-zone" for="vector-files">
+        <svg aria-hidden="true"><use href="#icon-upload"/></svg>
+        <strong>Choose vector files</strong>
+        <span>or drop them here</span>
+        <small>GeoJSON · CSV/TSV · Shapefile · FlatGeobuf</small>
+        <input id="vector-files" class="file-input" type="file" multiple accept=".geojson,.json,.csv,.tsv,.shp,.shx,.dbf,.prj,.fgb,.a.fgb" aria-describedby="file-help">
+      </label>
+      <p id="file-help" class="field-help">For Shapefile, select the .shp and .shx files together; add .dbf for attributes and .prj if available. Coordinates must already be WGS 84 lon/lat.</p>
+      <ul id="selected-files" class="selected-files" aria-live="polite"></ul>
+      <div class="form-grid">
+        <div class="field">
+          <label for="output-name">FGBA object name</label>
+          <input id="output-name" name="outputName" type="text" value="upload.a.fgb" required maxlength="180" autocomplete="off">
+          <small>Use a new name ending in .a.fgb; existing objects are never overwritten.</small>
+        </div>
+        <div class="field">
+          <label for="chunk-rows">Rows per analytical chunk</label>
+          <input id="chunk-rows" name="chunkRows" type="number" value="4096" min="1" max="1000000" step="1" required>
+          <small>Smaller chunks help selective filters; larger chunks reduce section overhead.</small>
+        </div>
+      </div>
+      <label class="check-field" for="analytics">
+        <input id="analytics" name="analytics" type="checkbox" checked>
+        <span><strong>Build attribute analytics</strong><small>Write global statistics, numeric/null zone maps, and Arrow chunks for faster SQL.</small></span>
+      </label>
+      <p id="upload-status" class="form-status" role="status" aria-live="polite"></p>
+      <div class="form-actions">
+        <button id="upload-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="upload-submit" class="button" type="submit"><svg aria-hidden="true"><use href="#icon-upload"/></svg>Convert to FGBA</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="sql-dialog" class="workspace-dialog query-dialog" aria-labelledby="sql-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="sql-title">SQL workspace</h2>
+        <p>Run read-only queries against the selected FGBA object.</p>
+      </div>
+      <button id="sql-close" class="icon-button" type="button" aria-label="Close SQL workspace"><svg aria-hidden="true"><use href="#icon-close"/></svg></button>
+    </div>
+    <div class="dialog-body">
+      <p id="sql-object-name" class="query-object">Select an FGBA object to query.</p>
+      <div class="example-queries" aria-label="Example queries">
+        <button class="query-example" type="button" data-query="SELECT * FROM features LIMIT 100">Preview rows</button>
+        <button class="query-example" type="button" data-query="SELECT COUNT(*) AS total FROM features">Count features</button>
+        <button class="query-example" type="button" data-query="SELECT * FROM attribute_stats">Attribute stats</button>
+        <button class="query-example" type="button" data-needs-bbox="true" data-query="SELECT COUNT(*) AS cells, SUM(count) AS estimated FROM a5_viewport_approx">Viewport estimate</button>
+      </div>
+      <form id="sql-form">
+        <div class="field">
+          <label for="sql-input">Read-only SQL</label>
+          <textarea id="sql-input" rows="5" required spellcheck="false">SELECT * FROM features LIMIT 100</textarea>
+        </div>
+        <div class="query-options">
+          <div class="field">
+            <label for="sql-bbox">Viewport bbox <span>(optional)</span></label>
+            <input id="sql-bbox" type="text" placeholder="-10,40,10,60" autocomplete="off">
+            <small>minx,miny,maxx,maxy; enables the approximate covering table.</small>
+          </div>
+          <div class="field">
+            <label for="sql-res">A5 resolution</label>
+            <input id="sql-res" type="number" min="0" max="30" step="1" placeholder="deepest">
+            <small>Optional; requires a bbox.</small>
+          </div>
+        </div>
+        <p id="sql-tables" class="query-help">Exact rows: features · Metadata: attribute_stats · A5 bands and approximate covering are available when present.</p>
+        <p id="sql-status" class="form-status" role="status" aria-live="polite"></p>
+        <div class="form-actions">
+          <button id="sql-clear" class="button secondary" type="button">Clear results</button>
+          <button id="sql-run" class="button" type="submit"><svg aria-hidden="true"><use href="#icon-query"/></svg>Run SQL</button>
+        </div>
+      </form>
+      <div id="sql-results" class="sql-results" tabindex="0" aria-label="SQL query results">
+        <p class="results-empty">Run a query to see its results here.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="/deck.gl.min.js"></script>
+  <script src="/flatgeobuf-geojson.min.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
