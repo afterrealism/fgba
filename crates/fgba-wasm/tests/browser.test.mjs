@@ -500,6 +500,32 @@ test("signed object URLs reject insecure transport, credentials, and malformed i
   }
 });
 
+test("signed object URLs allow HTTP on localhost subdomains", async () => {
+  const url = "http://tilify-test.localhost:9000/cities_12.a.fgb?token=minio";
+  let objectFetches = 0;
+  const store = createSignedObjectStore({
+    key: "cities_12.a.fgb",
+    generation: "g1",
+    signEndpoint: async () => ({
+      generation: "g1",
+      expires_at: Math.floor(Date.now() / 1000) + 30,
+      objects: [{ path: "cities_12.a.fgb", url }],
+    }),
+    fetchImpl: async (requestedUrl) => {
+      assert.equal(requestedUrl, url);
+      objectFetches += 1;
+      return new Response(new Uint8Array([fixture[0]]), {
+        status: 206,
+        headers: { "Content-Range": `bytes 0-0/${fixture.length}` },
+      });
+    },
+  });
+  store.beginOperation(1);
+  const response = await store.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=0-0" });
+  assert.equal(response.status, 206);
+  assert.equal(objectFetches, 1);
+});
+
 test("invalid responses are cancelled before unbounded body consumption", async () => {
   let canceled = false;
   const fullResponse = new Response(new ReadableStream({

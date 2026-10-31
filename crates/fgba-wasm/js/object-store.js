@@ -121,7 +121,8 @@ function signingMetadata(value, requestedKey, expectedGeneration, onGenerationCh
     throw objectError("SigningFailed", "Signing response URL is invalid");
   }
   const loopbackHttp = signedUrl.protocol === "http:"
-    && ["localhost", "127.0.0.1", "[::1]"].includes(signedUrl.hostname);
+    && (["localhost", "127.0.0.1", "[::1]"].includes(signedUrl.hostname)
+      || signedUrl.hostname.endsWith(".localhost"));
   if ((signedUrl.protocol !== "https:" && !loopbackHttp) || signedUrl.username || signedUrl.password) {
     throw objectError("SigningFailed", "Signing response URL must be HTTPS or loopback HTTP without credentials");
   }
