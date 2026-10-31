@@ -272,7 +272,7 @@ before(async () => {
     response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify({
       generation,
-      expires_at: new Date(Date.now() + 300_000).toISOString(),
+      expires_at: Math.floor(Date.now() / 1000) + 300,
       objects: [{ path: key, url: `${objectOrigin}/${key}?token=${issuedToken}` }],
     }));
   });
@@ -417,7 +417,7 @@ test("signing refreshes proactively inside the TTL skew and requests stay capped
       signs += 1;
       return {
         generation: "g1",
-        expires_at: Date.now() + 40,
+        expires_at: Math.floor(Date.now() / 1000) + 1,
         objects: [{
           path: "cities_12.a.fgb",
           url: `${objectOrigin}/cities_12.a.fgb?token=short-${signs}`,
@@ -428,7 +428,7 @@ test("signing refreshes proactively inside the TTL skew and requests stay capped
   store.beginOperation(2);
   const probe = await store.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=0-0" });
   assert.equal(probe.status, 206);
-  await delay(60);
+  await delay(1100);
   const second = await store.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=1-1" });
   assert.equal(second.status, 206);
   assert.equal(signs, 2);
@@ -437,6 +437,37 @@ test("signing refreshes proactively inside the TTL skew and requests stay capped
     (error) => error.name === "RequestLimit",
   );
   assert.equal(requests.length, 2);
+});
+
+test("numeric signing expires_at uses Unix seconds and requires a safe integer", async () => {
+  const expiresAt = Math.floor(Date.now() / 1000) + 30;
+  const store = createSignedObjectStore({
+    key: "cities_12.a.fgb",
+    generation: "g1",
+    signEndpoint: async () => ({
+      generation: "g1",
+      expires_at: expiresAt,
+      objects: [{ path: "cities_12.a.fgb", url: `${objectOrigin}/cities_12.a.fgb?token=unix-seconds` }],
+    }),
+  });
+  store.beginOperation(1);
+  const response = await store.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=0-0" });
+  assert.equal(response.status, 206);
+
+  const fractional = createSignedObjectStore({
+    key: "cities_12.a.fgb",
+    generation: "g1",
+    signEndpoint: async () => ({
+      generation: "g1",
+      expires_at: expiresAt + 0.5,
+      objects: [{ path: "cities_12.a.fgb", url: `${objectOrigin}/cities_12.a.fgb?token=fractional` }],
+    }),
+  });
+  fractional.beginOperation(1);
+  await assert.rejects(
+    fractional.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=0-0" }),
+    (error) => error.name === "SigningFailed",
+  );
 });
 
 test("invalid responses are cancelled before unbounded body consumption", async () => {
@@ -454,7 +485,7 @@ test("invalid responses are cancelled before unbounded body consumption", async 
     generation: "g1",
     signEndpoint: async () => ({
       generation: "g1",
-      expires_at: Date.now() + 10_000,
+      expires_at: Math.floor(Date.now() / 1000) + 10,
       objects: [{ path: "cities_12.a.fgb", url: "https://object.invalid/cities_12.a.fgb" }],
     }),
     fetchImpl: async () => fullResponse,
@@ -480,7 +511,7 @@ test("invalid responses are cancelled before unbounded body consumption", async 
     generation: "g1",
     signEndpoint: async () => ({
       generation: "g1",
-      expires_at: Date.now() + 10_000,
+      expires_at: Math.floor(Date.now() / 1000) + 10,
       objects: [{ path: "cities_12.a.fgb", url: "https://object.invalid/cities_12.a.fgb" }],
     }),
     fetchImpl: async () => longResponse,

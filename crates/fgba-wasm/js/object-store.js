@@ -132,8 +132,12 @@ function signingMetadata(value, requestedKey, expectedGeneration, onGenerationCh
     throw objectError("GenerationChanged", "Object generation changed; cached dataset state was discarded");
   }
   const now = Date.now();
-  const expiresAt = typeof value.expires_at === "number" ? value.expires_at : Date.parse(value.expires_at);
-  if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+  const numericExpiry = typeof value.expires_at === "number";
+  if (numericExpiry && !Number.isSafeInteger(value.expires_at)) {
+    throw objectError("SigningFailed", "Signing response expiry must be an integer Unix timestamp");
+  }
+  const expiresAt = numericExpiry ? value.expires_at * 1000 : Date.parse(value.expires_at);
+  if (!Number.isFinite(expiresAt) || !Number.isSafeInteger(expiresAt) || expiresAt <= now) {
     throw objectError("SigningFailed", "Signing response has an invalid expiry");
   }
   const ttl = expiresAt - now;
