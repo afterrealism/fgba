@@ -78,16 +78,7 @@ export function validateRangeResponse(response, rangeHeader, maxRangeBytes = DEF
 
 async function readBoundedBody(response, expectedLength) {
   if (!response.body?.getReader) {
-    try {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength > expectedLength) {
-        throw objectError("ShortRead", "Object response exceeds the requested span");
-      }
-      return bytes;
-    } catch (error) {
-      if (error?.code || error?.name === "AbortError") throw error;
-      throw objectError("ObjectTransportError", "Object response body could not be read");
-    }
+    throw objectError("ObjectTransportError", "Object response body streaming is unavailable");
   }
 
   const reader = response.body.getReader();
@@ -122,6 +113,17 @@ function signingMetadata(value, requestedKey, expectedGeneration, onGenerationCh
   const [signedObject] = value.objects;
   if (signedObject.path !== requestedKey || typeof signedObject.url !== "string" || signedObject.url.length === 0) {
     throw objectError("SigningFailed", "Signing response object does not match the requested path");
+  }
+  let signedUrl;
+  try {
+    signedUrl = new URL(signedObject.url);
+  } catch {
+    throw objectError("SigningFailed", "Signing response URL is invalid");
+  }
+  const loopbackHttp = signedUrl.protocol === "http:"
+    && ["localhost", "127.0.0.1", "[::1]"].includes(signedUrl.hostname);
+  if ((signedUrl.protocol !== "https:" && !loopbackHttp) || signedUrl.username || signedUrl.password) {
+    throw objectError("SigningFailed", "Signing response URL must be HTTPS or loopback HTTP without credentials");
   }
   if (value.generation === undefined || value.generation === null) {
     throw objectError("SigningFailed", "Signing response did not include a generation");

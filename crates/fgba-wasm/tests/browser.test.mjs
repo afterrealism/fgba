@@ -470,6 +470,36 @@ test("numeric signing expires_at uses Unix seconds and requires a safe integer",
   );
 });
 
+test("signed object URLs reject insecure transport, credentials, and malformed input before fetching", async () => {
+  for (const url of [
+    "http://object.invalid/cities_12.a.fgb?token=insecure",
+    "https://user:pass@object.invalid/cities_12.a.fgb?token=credentials",
+    "https://[::1/cities_12.a.fgb?token=malformed",
+  ]) {
+    let objectFetches = 0;
+    const store = createSignedObjectStore({
+      key: "cities_12.a.fgb",
+      generation: "g1",
+      signEndpoint: async () => ({
+        generation: "g1",
+        expires_at: Math.floor(Date.now() / 1000) + 30,
+        objects: [{ path: "cities_12.a.fgb", url }],
+      }),
+      fetchImpl: async () => {
+        objectFetches += 1;
+        throw new Error("object fetch must not occur");
+      },
+    });
+    store.beginOperation(1);
+    await assert.rejects(
+      store.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=0-0" }),
+      (error) => error.name === "SigningFailed",
+      url,
+    );
+    assert.equal(objectFetches, 0, url);
+  }
+});
+
 test("invalid responses are cancelled before unbounded body consumption", async () => {
   let canceled = false;
   const fullResponse = new Response(new ReadableStream({
@@ -521,6 +551,34 @@ test("invalid responses are cancelled before unbounded body consumption", async 
     longStore.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=0-0" }),
     (error) => error.name === "ShortRead",
   );
+});
+
+test("non-streaming object bodies are rejected without an arrayBuffer fallback", async () => {
+  let unboundedReads = 0;
+  const response = new Response(null, {
+    status: 206,
+    headers: { "Content-Range": `bytes 0-0/${fixture.length}` },
+  });
+  response.arrayBuffer = async () => {
+    unboundedReads += 1;
+    return new ArrayBuffer(1);
+  };
+  const store = createSignedObjectStore({
+    key: "cities_12.a.fgb",
+    generation: "g1",
+    signEndpoint: async () => ({
+      generation: "g1",
+      expires_at: Math.floor(Date.now() / 1000) + 10,
+      objects: [{ path: "cities_12.a.fgb", url: "https://object.invalid/cities_12.a.fgb" }],
+    }),
+    fetchImpl: async () => response,
+  });
+  store.beginOperation(1);
+  await assert.rejects(
+    store.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=0-0" }),
+    (error) => error.name === "ObjectTransportError",
+  );
+  assert.equal(unboundedReads, 0);
 });
 
 test("bounded SQL uses exact counts, A5 sources, and read-only validation", async () => {

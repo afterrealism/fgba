@@ -208,6 +208,7 @@ impl ResultEncoder {
             if column > 0 {
                 self.append(",")?;
             }
+            self.preflight_value(array.as_ref(), row)?;
             let value = arrow_value(array.as_ref(), row)?;
             self.value(&value)?;
         }
@@ -219,6 +220,57 @@ impl ResultEncoder {
         Ok(())
     }
 
+    fn preflight_value(&self, array: &dyn Array, row: usize) -> Result<()> {
+        if array.is_null(row) {
+            return self.reserve(4);
+        }
+        macro_rules! string_len {
+            ($kind:ty, $name:literal) => {{
+                let values = array
+                    .as_any()
+                    .downcast_ref::<$kind>()
+                    .ok_or_else(|| Error::Format(concat!($name, " array type mismatch").into()))?;
+                let length = usize::try_from(values.value_length(row))
+                    .map_err(|_| Error::InvalidInput("result JSON size overflows".into()))?;
+                self.reserve(checked_scalar_len(length, 1, 2)?)?;
+                json_string_len(values.value(row))?
+            }};
+        }
+        macro_rules! binary_len {
+            ($kind:ty, $name:literal) => {{
+                let values = array
+                    .as_any()
+                    .downcast_ref::<$kind>()
+                    .ok_or_else(|| Error::Format(concat!($name, " array type mismatch").into()))?;
+                let length = usize::try_from(values.value_length(row))
+                    .map_err(|_| Error::InvalidInput("result JSON size overflows".into()))?;
+                checked_scalar_len(length, 2, 2)?
+            }};
+        }
+        let encoded = match array.data_type() {
+            DataType::Int8 => 4,
+            DataType::Int16 => 6,
+            DataType::Int32 => 11,
+            DataType::Int64 | DataType::UInt64 => 22,
+            DataType::UInt8 => 3,
+            DataType::UInt16 => 5,
+            DataType::UInt32 => 10,
+            DataType::Float32 | DataType::Float64 => 32,
+            DataType::Boolean => 5,
+            DataType::Utf8 => string_len!(StringArray, "Utf8"),
+            DataType::LargeUtf8 => string_len!(LargeStringArray, "LargeUtf8"),
+            DataType::Binary => binary_len!(BinaryArray, "Binary"),
+            DataType::LargeBinary => binary_len!(LargeBinaryArray, "LargeBinary"),
+            DataType::Null => 4,
+            other => {
+                return Err(Error::InvalidInput(format!(
+                    "Arrow result type {other} is not supported by JSON output"
+                )))
+            }
+        };
+        self.reserve(encoded)
+    }
+
     fn value(&mut self, value: &Value) -> Result<()> {
         let encoded = serde_json::to_string(value)
             .map_err(|error| Error::InvalidInput(format!("cannot encode result JSON: {error}")))?;
@@ -226,10 +278,16 @@ impl ResultEncoder {
     }
 
     fn append(&mut self, text: &str) -> Result<()> {
+        self.reserve(text.len())?;
+        self.json.push_str(text);
+        Ok(())
+    }
+
+    fn reserve(&self, len: usize) -> Result<()> {
         let next = self
             .json
             .len()
-            .checked_add(text.len())
+            .checked_add(len)
             .and_then(|size| size.checked_add(32))
             .ok_or_else(|| Error::InvalidInput("result JSON size overflows".into()))?;
         if next > self.limits.max_result_json_bytes {
@@ -238,7 +296,6 @@ impl ResultEncoder {
                 self.limits.max_result_json_bytes
             )));
         }
-        self.json.push_str(text);
         Ok(())
     }
 
@@ -248,6 +305,27 @@ impl ResultEncoder {
         self.append("}")?;
         Ok(self.json)
     }
+}
+
+fn checked_scalar_len(length: usize, multiplier: usize, extra: usize) -> Result<usize> {
+    length
+        .checked_mul(multiplier)
+        .and_then(|size| size.checked_add(extra))
+        .ok_or_else(|| Error::InvalidInput("result JSON size overflows".into()))
+}
+
+fn json_string_len(value: &str) -> Result<usize> {
+    value.bytes().try_fold(2_usize, |length, byte| {
+        let encoded = match byte {
+            b'"' | b'\\' => 2,
+            b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 2,
+            b'\x00'..=b'\x1f' => 6,
+            _ => 1,
+        };
+        length
+            .checked_add(encoded)
+            .ok_or_else(|| Error::InvalidInput("result JSON size overflows".into()))
+    })
 }
 
 fn arrow_value(array: &dyn Array, row: usize) -> Result<Value> {
@@ -360,11 +438,44 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::arrow::datatypes::{Field, Schema};
+    use std::sync::Arc;
+
+    type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
     #[test]
     fn oversized_decoded_reservation_fails_before_any_allocation() {
         let mut budget = Budget::new(SqlLimits::default());
         assert!(budget.reserve_decoded(MAX_DECODED_BYTES + 1).is_err());
         assert_eq!(budget.decoded, 0);
+    }
+
+    #[test]
+    fn single_oversized_scalar_fails_preflight_without_growing_result_buffer() -> TestResult {
+        let array = StringArray::from(vec!["x".repeat(MAX_RESULT_JSON_BYTES + 1)]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)])?;
+        let mut encoder = ResultEncoder::new(schema, SqlLimits::default())?;
+
+        let error = encoder
+            .append_row(&batch, 0)
+            .err()
+            .ok_or("oversized scalar unexpectedly succeeded")?;
+        assert!(error.to_string().contains("result JSON budget exceeded"));
+        assert_eq!(encoder.rows, 0);
+        assert!(encoder.json.capacity() < MAX_RESULT_JSON_BYTES);
+        Ok(())
+    }
+
+    #[test]
+    fn string_preflight_length_matches_serde_json() -> TestResult {
+        for value in ["plain", "\"\\\u{0}\u{8}\t\n\u{c}\r\u{1f}", "é🙂"] {
+            assert_eq!(json_string_len(value)?, serde_json::to_string(value)?.len());
+        }
+        Ok(())
     }
 }
