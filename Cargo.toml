@@ -5,8 +5,8 @@ members = ["crates/fgba", "crates/fgba-cli", "crates/fgba-sql", "xtask"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-# MSRV 1.89: required by the latest locked dependency graph (including uuid 1.29).
-rust-version = "1.89"
+# Minimum supported Rust version for the complete locked dependency graph.
+rust-version = "1.91"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/afterrealism/fgba"
 

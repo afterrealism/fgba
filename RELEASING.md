@@ -3,8 +3,9 @@
 Owner-run steps to publish v0.1.0. Everything up to step 4 is already done at
 HEAD; these steps require the owner's GitHub and crates.io credentials.
 
-Prerequisites: `gh` CLI authenticated (`gh auth login`), a crates.io account
-with publish rights, and a clean working tree on `main`.
+Prerequisites: Rust 1.91.0 or newer (the workspace MSRV), `gh` CLI authenticated
+(`gh auth login`), a crates.io account with publish rights, and a clean working
+tree on `main`.
 
 ## 1. Create the GitHub remote
 

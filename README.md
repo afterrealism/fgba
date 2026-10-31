@@ -66,15 +66,15 @@ Measured on the reference machine (1M features): conversion ≈ 4 s, trailer ≈
 
 - `http` — blocking `Read + Seek` over HTTP range requests (`ureq`); native targets.
 - `analytics` — optional kind-2 property statistics and kind-3 geometry metrics with independent Arrow IPC chunks.
-- `fgba-sql` — native read-only DataFusion SQL, used by `fgba query`; local files only.
+- `fgba-sql` — native read-only DataFusion SQL for `fgba query`, plus a minimal single-partition in-memory `EagerSession` for pure-Rust browser execution; no external SQL engine.
 
 ## WebAssembly
 
-The core crate builds for `wasm32-unknown-unknown`. In the browser, fetch byte ranges asynchronously (`fetch` + `Range` header), feed them to `fgba::SliceReader`, decode — two phases, no blocking. See [`crates/fgba/examples/wasm/`](crates/fgba/examples/wasm/) for a dependency-free two-phase browser demo.
+The core crate builds for `wasm32-unknown-unknown`. In the browser, fetch byte ranges asynchronously (`fetch` + `Range` header), feed them to `fgba::SliceReader`, decode — two phases, no blocking. See [`crates/fgba/examples/wasm/`](crates/fgba/examples/wasm/) for a dependency-free two-phase browser demo. `fgba-sql` also compiles for this target and exposes `EagerSession` for read-only SQL over one-partition in-memory batches without DuckDB or another external engine.
 
 ## Versioning
 
-The format versions by the footer magic (`FGBAGG01`) and the directory version byte; A5 cell IDs are frozen upstream, so files written today refer to the same cells forever. The crates follow SemVer. The specification is [SPEC.md](SPEC.md) (**Draft v1**); optional kind-2 and kind-3 analytical columns/statistics are additive and do not change either version.
+The workspace requires Rust 1.91 or newer. The format versions by the footer magic (`FGBAGG01`) and the directory version byte; A5 cell IDs are frozen upstream, so files written today refer to the same cells forever. The crates follow SemVer. The specification is [SPEC.md](SPEC.md) (**Draft v1**); optional kind-2 and kind-3 analytical columns/statistics are additive and do not change either version.
 
 ## Safety
 

@@ -2,10 +2,14 @@
 
 use crate::error::{Error, Result};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use flatgeobuf::{ColumnType, FgbReader};
+use flatgeobuf::ColumnType;
+#[cfg(not(target_arch = "wasm32"))]
+use flatgeobuf::FgbReader;
 use geozero::CoordDimensions;
 use std::collections::{HashMap, HashSet};
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::BufReader;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -74,13 +78,15 @@ pub struct OutputSchema {
 
 impl OutputSchema {
     /// Read only the FlatGeobuf header and construct an owned SQL schema.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn open(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path)?;
         let reader = FgbReader::open(BufReader::new(file))?;
         Self::from_header(reader.header())
     }
 
-    fn from_header(header: flatgeobuf::Header<'_>) -> Result<Self> {
+    /// Construct an owned SQL schema from an already decoded FlatGeobuf header.
+    pub fn from_header(header: flatgeobuf::Header<'_>) -> Result<Self> {
         let mut fields = Vec::new();
         let mut properties = Vec::new();
         let mut exact = HashSet::new();
@@ -165,11 +171,13 @@ impl OutputSchema {
     }
 
     /// Whether an output field is the body-decoded WKB column.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn is_wkb(&self, output_index: usize) -> bool {
         output_index == self.properties.len()
     }
 
     /// Return the kind-3 metric ID for a stored bbox or virtual metric field.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn metric_id(&self, output_index: usize) -> Option<u16> {
         if !self.is_geometry(output_index) {
             return None;
@@ -181,11 +189,13 @@ impl OutputSchema {
     }
 
     /// Whether an output field requires valid kind-3 metric metadata.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn is_virtual_metric(&self, output_index: usize) -> bool {
         matches!(self.metric_id(output_index), Some(0..=2))
     }
 
     /// Whether an output field is one of the four body-decodable bbox fields.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn is_bbox(&self, output_index: usize) -> bool {
         matches!(self.metric_id(output_index), Some(3..=6))
     }

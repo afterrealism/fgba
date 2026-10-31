@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     body execution.
   - Planar `st_length`, `st_area`, and `st_npoints(Binary)` functions over
     supported standard WKB, without CRS transformation.
+  - Minimal `EagerSession` execution over one-partition in-memory batches,
+    with read-only SQL options and direct async DataFusion streams. The crate
+    compiles for `wasm32-unknown-unknown` without DuckDB or another SQL engine.
 - **Range Lab** (`example/`): local vector uploads with analytics/chunk controls,
   automatic FGBA conversion into an uploads bucket, map preview, and read-only
   SQL results. Wide browser band queries split and deduplicate covering panels
@@ -58,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   browser examples, deployed via GitHub Actions.
 - `xtask` test-vector tooling: `cargo xtask gen-testdata [--write]` and
   `cargo xtask verify-vectors` (also keeps the per-crate vector copies in sync).
+
+### Changed
+
+- Raised the workspace MSRV from Rust 1.89 to 1.91 and aligned the dedicated
+  CI MSRV job with Rust 1.91.0; package versions remain 0.1.0.
 
 ### Fixed
 

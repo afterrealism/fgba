@@ -135,6 +135,7 @@ impl<'a> ChunkPruner<'a> {
 }
 
 /// Whether DataFusion may pass this expression as an inexact zone-map filter.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn supports_filter(
     schema: &OutputSchema,
     has_geometry_metrics: bool,

@@ -23,5 +23,8 @@ geozero = { version = "=0.15.1", default-features = false, features = ["with-wkb
 thiserror = "2"
 tokio = { version = "=1.54.1", features = ["rt", "sync"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
 [dev-dependencies]
 tempfile = "3.24.0"
