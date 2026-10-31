@@ -474,7 +474,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -1290,12 +1292,14 @@ dependencies = [
  "arrow-csv",
  "arrow-ipc",
  "async-trait",
+ "chrono",
  "datafusion",
  "fgba",
  "flatgeobuf",
  "futures",
  "geozero",
  "getrandom 0.3.4",
+ "sqlparser",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -1306,14 +1310,20 @@ name = "fgba-wasm"
 version = "0.1.0"
 dependencies = [
  "a5",
+ "datafusion",
  "fgba",
+ "fgba-sql",
  "flatgeobuf",
+ "futures",
  "geozero",
  "getrandom 0.3.4",
  "js-sys",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
 ]
 

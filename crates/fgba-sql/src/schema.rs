@@ -26,7 +26,7 @@ pub const GEOMETRY_COLUMNS: [&str; 8] = [
 ];
 
 /// Map a stored geometry output column to its GEOMETRY_METRICS metric ID.
-pub(crate) fn geometry_metric_id(name: &str) -> Option<u16> {
+pub fn geometry_metric_id(name: &str) -> Option<u16> {
     match name {
         "geom_length" => Some(0),
         "geom_area" => Some(1),
@@ -171,14 +171,12 @@ impl OutputSchema {
     }
 
     /// Whether an output field is the body-decoded WKB column.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn is_wkb(&self, output_index: usize) -> bool {
+    pub fn is_wkb(&self, output_index: usize) -> bool {
         output_index == self.properties.len()
     }
 
     /// Return the kind-3 metric ID for a stored bbox or virtual metric field.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn metric_id(&self, output_index: usize) -> Option<u16> {
+    pub fn metric_id(&self, output_index: usize) -> Option<u16> {
         if !self.is_geometry(output_index) {
             return None;
         }
@@ -189,14 +187,12 @@ impl OutputSchema {
     }
 
     /// Whether an output field requires valid kind-3 metric metadata.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn is_virtual_metric(&self, output_index: usize) -> bool {
+    pub fn is_virtual_metric(&self, output_index: usize) -> bool {
         matches!(self.metric_id(output_index), Some(0..=2))
     }
 
     /// Whether an output field is one of the four body-decodable bbox fields.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn is_bbox(&self, output_index: usize) -> bool {
+    pub fn is_bbox(&self, output_index: usize) -> bool {
         matches!(self.metric_id(output_index), Some(3..=6))
     }
 }

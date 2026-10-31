@@ -47,7 +47,7 @@ self.onmessage = (event) => {
     enqueue(() => post(id, true, null));
     return;
   }
-  if (!["open", "bands", "queryA5", "queryFeatures"].includes(type)) {
+  if (!["open", "bands", "queryA5", "queryFeatures", "querySql"].includes(type)) {
     post(id, false, new Error(`Unknown worker operation: ${type}`));
     return;
   }
@@ -75,6 +75,7 @@ self.onmessage = (event) => {
         if (type === "bands") value = dataset.bands();
         if (type === "queryA5") value = await dataset.queryA5({ ...event.data.options, signal: controller.signal });
         if (type === "queryFeatures") value = await dataset.queryFeatures({ ...event.data.options, signal: controller.signal });
+        if (type === "querySql") value = await dataset.querySql({ ...event.data.options, signal: controller.signal });
       }
       if (requestView !== viewId) throw staleError();
       post(id, true, value);

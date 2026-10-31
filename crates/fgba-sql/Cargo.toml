@@ -20,10 +20,12 @@ fgba = { version = "0.1.0", path = "../fgba", features = ["analytics"] }
 flatgeobuf = { version = "=6.0.1", default-features = false }
 futures = "=0.3.34"
 geozero = { version = "=0.15.1", default-features = false, features = ["with-wkb"] }
+sqlparser = { version = "=0.55.0", features = ["visitor"] }
 thiserror = "2"
 tokio = { version = "=1.54.1", features = ["rt", "sync"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "wasmbind"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]

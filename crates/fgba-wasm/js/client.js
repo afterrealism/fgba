@@ -116,7 +116,7 @@ export class FgbaDataset {
       this.assertActive(signal);
       let miss;
       try {
-        const result = operation();
+        const result = await operation();
         this.assertActive(signal);
         return result;
       } catch (error) {
@@ -173,6 +173,27 @@ export class FgbaDataset {
     });
   }
 
+  /** Execute bounded read-only SQL over eager one-partition RecordBatch sources. */
+  async querySql({ sql, bbox, res, limits, signal }) {
+    if (typeof sql !== "string" || sql.trim().length === 0) throw new TypeError("sql is required");
+    if (bbox !== undefined) validateBbox(bbox);
+    if (res !== undefined && (!Number.isInteger(res) || res < 0 || res > 30)) {
+      throw new TypeError("res must be in 0..=30");
+    }
+    if (!limits || typeof limits !== "object" || Array.isArray(limits)) {
+      throw new TypeError("limits are required");
+    }
+    return this.enqueue(async () => {
+      this.assertActive(signal);
+      this.store.beginOperation(MAX_REQUESTS);
+      const json = await this.drive(
+        () => this.wasm.querySql(sql, bbox || [], res, JSON.stringify(limits)),
+        signal,
+      );
+      return JSON.parse(json);
+    });
+  }
+
   /** Immediately invalidate transport and discard all WASM/cache state. */
   close() {
     if (this.closed) return;
@@ -184,5 +205,111 @@ export class FgbaDataset {
       this.wasm.free();
       this.wasm = null;
     }
+  }
+}
+
+/**
+ * Own an FGBA worker and recreate it when an eager SQL query exceeds 30 seconds.
+ * A timeout discards the open dataset; the next operation requires a fresh open.
+ */
+export class FgbaWorkerClient {
+  constructor({ workerFactory, sqlTimeoutMs = 30_000 } = {}) {
+    this.workerFactory = workerFactory || (() => new Worker(new URL("./worker.js", import.meta.url), { type: "module" }));
+    if (typeof this.workerFactory !== "function") throw new TypeError("workerFactory must be a function");
+    if (!Number.isSafeInteger(sqlTimeoutMs) || sqlTimeoutMs <= 0) throw new TypeError("sqlTimeoutMs must be positive");
+    this.sqlTimeoutMs = sqlTimeoutMs;
+    this.worker = null;
+    this.pending = new Map();
+    this.nextId = 0;
+    this.closed = false;
+    this.startWorker();
+  }
+
+  startWorker() {
+    const worker = this.workerFactory();
+    if (!worker || typeof worker.postMessage !== "function" || typeof worker.terminate !== "function") {
+      throw new TypeError("workerFactory must return a Worker-compatible object");
+    }
+    this.worker = worker;
+    worker.onmessage = (event) => this.receive(event.data || {});
+    worker.onerror = (event) => {
+      const error = new Error("FGBA worker failed");
+      error.name = "WorkerError";
+      if (event?.message) error.message = String(event.message);
+      this.restart(error);
+    };
+  }
+
+  receive({ id, ok, value, error }) {
+    const request = this.pending.get(id);
+    if (!request) return;
+    clearTimeout(request.timer);
+    this.pending.delete(id);
+    if (ok) {
+      request.resolve(value);
+      return;
+    }
+    const failure = new Error(String(error?.message || "FGBA worker operation failed"));
+    failure.name = String(error?.name || "Error");
+    if (error?.code !== undefined) failure.code = String(error.code);
+    if (Number.isInteger(error?.status)) failure.status = error.status;
+    request.reject(failure);
+  }
+
+  request(type, options, timeoutMs) {
+    if (this.closed) return Promise.reject(new Error("FGBA worker client is closed"));
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => {
+      const timer = timeoutMs === undefined ? null : setTimeout(() => {
+        const error = new Error(`FGBA SQL exceeded the ${this.sqlTimeoutMs} ms worker watchdog`);
+        error.name = "QueryTimeout";
+        this.restart(error);
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      try {
+        this.worker.postMessage({ id, type, options });
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
+    });
+  }
+
+  restart(error) {
+    if (this.closed) return;
+    const worker = this.worker;
+    this.worker = null;
+    if (worker) {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
+    }
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    this.pending.clear();
+    this.startWorker();
+  }
+
+  open(options) { return this.request("open", options); }
+  bands() { return this.request("bands"); }
+  queryA5(options) { return this.request("queryA5", options); }
+  queryFeatures(options) { return this.request("queryFeatures", options); }
+  querySql(options) { return this.request("querySql", options, this.sqlTimeoutMs); }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    const error = new Error("FGBA worker client is closed");
+    error.name = "DatasetClosed";
+    if (this.worker) this.worker.terminate();
+    this.worker = null;
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    this.pending.clear();
   }
 }

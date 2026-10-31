@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod batch;
 pub mod error;
 pub mod memory;
 #[cfg(not(target_arch = "wasm32"))]

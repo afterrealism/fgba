@@ -1,6 +1,7 @@
 //! Retryable FGBA operations over the sparse source.
 
 use crate::range::{would_block, SparseRange, WouldBlock, MAX_CACHE_BYTES, MAX_RANGE_BYTES};
+use crate::sql::{SqlLimits, SqlRequest};
 use fgba::{BandMeta, Reader};
 use flatgeobuf::packed_r_tree::PackedRTree;
 use flatgeobuf::{FallibleStreamingIterator, FgbReader};
@@ -33,7 +34,7 @@ fn miss_value(miss: WouldBlock) -> JsValue {
     object.into()
 }
 
-fn find_miss(mut error: &(dyn StdError + 'static)) -> Option<WouldBlock> {
+pub(crate) fn find_miss(mut error: &(dyn StdError + 'static)) -> Option<WouldBlock> {
     loop {
         if let Some(flatgeobuf::Error::IO(io_error)) = error.downcast_ref::<flatgeobuf::Error>() {
             if let Some(miss) = would_block(io_error) {
@@ -429,6 +430,38 @@ impl SparseDataset {
                 .map_err(|error| dataset_error("finish GeoJSON", error))?;
         }
         String::from_utf8(bytes).map_err(|error| dataset_error("GeoJSON is not UTF-8", error))
+    }
+
+    /// Execute bounded read-only SQL over eagerly materialized source batches.
+    #[wasm_bindgen(js_name = querySql)]
+    pub async fn query_sql(
+        &mut self,
+        sql: String,
+        bbox: Vec<f64>,
+        res: Option<u8>,
+        limits_json: String,
+    ) -> Result<String, JsValue> {
+        if self.closed || self.bands.is_none() {
+            return Err(JsValue::from_str("dataset is not open"));
+        }
+        let bbox = if bbox.is_empty() {
+            None
+        } else {
+            Some(parse_bbox(bbox)?)
+        };
+        let limits = serde_json::from_str::<SqlLimits>(&limits_json)
+            .map_err(|error| dataset_error("parse SQL limits", error))?;
+        crate::sql::query_sql(
+            self.source.clone(),
+            SqlRequest {
+                sql,
+                bbox,
+                res,
+                limits,
+            },
+        )
+        .await
+        .map_err(|error| dataset_error("query SQL", error))
     }
 
     /// Drop all metadata and cached bytes. Further operations are rejected.

@@ -1,16 +1,13 @@
 //! Synchronous local registration and DataFusion session execution.
 
+use crate::memory::{attribute_stats_table, cells_schema, cells_table};
 use crate::plan::metadata_count_plan;
 use crate::schema::OutputSchema;
 use crate::stream::BatchConfig;
 use crate::table::FgbaTable;
 use crate::{Error, Result};
 use async_trait::async_trait;
-use datafusion::arrow::array::{
-    BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt16Array, UInt32Array,
-    UInt64Array,
-};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::{MemTable, TableProvider, TableType};
@@ -19,7 +16,6 @@ use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use fgba::{BodyAnalytics, ColumnAnalytics, ValueClass};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -337,187 +333,5 @@ impl TableProvider for A5Table {
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let table = self.load()?;
         table.scan(state, projection, filters, limit).await
-    }
-}
-
-fn cells_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("cell_id", DataType::UInt64, false),
-        Field::new("count", DataType::UInt32, false),
-    ]))
-}
-
-fn cells_table(cells: &[(u64, u32)]) -> Result<Arc<MemTable>> {
-    let ids = cells.iter().map(|cell| cell.0).collect::<Vec<_>>();
-    let counts = cells.iter().map(|cell| cell.1).collect::<Vec<_>>();
-    let batch = RecordBatch::try_new(
-        cells_schema(),
-        vec![
-            Arc::new(UInt64Array::from(ids)),
-            Arc::new(UInt32Array::from(counts)),
-        ],
-    )?;
-    Ok(Arc::new(MemTable::try_new(
-        batch.schema(),
-        vec![vec![batch]],
-    )?))
-}
-
-#[allow(clippy::type_complexity)]
-fn attribute_stats_table(analytics: &BodyAnalytics) -> Result<Arc<MemTable>> {
-    let schema = stats_schema();
-    let mut column_index = Vec::new();
-    let mut names = Vec::new();
-    let mut classes = Vec::new();
-    let mut row_count = Vec::new();
-    let mut non_null_count = Vec::new();
-    let mut null_count = Vec::new();
-    let mut nan_count = Vec::new();
-    let mut min_i64 = Vec::new();
-    let mut max_i64 = Vec::new();
-    let mut min_u64 = Vec::new();
-    let mut max_u64 = Vec::new();
-    let mut min_f64 = Vec::new();
-    let mut max_f64 = Vec::new();
-    let mut sum_text = Vec::new();
-    let mut sum_valid = Vec::new();
-    let mut has_infinity = Vec::new();
-    for column in &analytics.columns {
-        let stat = &column.global;
-        let class = column.descriptor.value_class;
-        column_index.push(column.descriptor.column_index);
-        names.push(column.name.clone());
-        classes.push(value_class_name(class).to_owned());
-        row_count.push(analytics.row_count);
-        non_null_count.push(stat.non_null_count);
-        null_count.push(
-            analytics
-                .row_count
-                .checked_sub(stat.non_null_count)
-                .ok_or_else(|| {
-                    Error::Format(format!("invalid null count for property {:?}", column.name))
-                })?,
-        );
-        nan_count.push(stat.nan_count);
-        let (min_signed, max_signed) = signed_bounds(column);
-        let (min_unsigned, max_unsigned) = unsigned_bounds(column);
-        let (min_float, max_float) = float_bounds(column);
-        min_i64.push(min_signed);
-        max_i64.push(max_signed);
-        min_u64.push(min_unsigned);
-        max_u64.push(max_unsigned);
-        min_f64.push(min_float);
-        max_f64.push(max_float);
-        sum_text.push(stat_sum_text(column)?);
-        sum_valid.push(stat.sum_valid());
-        has_infinity.push(stat.has_infinity());
-    }
-    let arrays: Vec<Arc<dyn datafusion::arrow::array::Array>> = vec![
-        Arc::new(UInt16Array::from(column_index)),
-        Arc::new(StringArray::from(names)),
-        Arc::new(StringArray::from(classes)),
-        Arc::new(UInt64Array::from(row_count)),
-        Arc::new(UInt64Array::from(non_null_count)),
-        Arc::new(UInt64Array::from(null_count)),
-        Arc::new(UInt64Array::from(nan_count)),
-        Arc::new(Int64Array::from(min_i64)),
-        Arc::new(Int64Array::from(max_i64)),
-        Arc::new(UInt64Array::from(min_u64)),
-        Arc::new(UInt64Array::from(max_u64)),
-        Arc::new(Float64Array::from(min_f64)),
-        Arc::new(Float64Array::from(max_f64)),
-        Arc::new(StringArray::from(sum_text)),
-        Arc::new(BooleanArray::from(sum_valid)),
-        Arc::new(BooleanArray::from(has_infinity)),
-    ];
-    let batch = RecordBatch::try_new(schema, arrays)?;
-    Ok(Arc::new(MemTable::try_new(
-        batch.schema(),
-        vec![vec![batch]],
-    )?))
-}
-
-fn stats_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("column_index", DataType::UInt16, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("value_class", DataType::Utf8, false),
-        Field::new("row_count", DataType::UInt64, false),
-        Field::new("non_null_count", DataType::UInt64, false),
-        Field::new("null_count", DataType::UInt64, false),
-        Field::new("nan_count", DataType::UInt64, false),
-        Field::new("min_i64", DataType::Int64, true),
-        Field::new("max_i64", DataType::Int64, true),
-        Field::new("min_u64", DataType::UInt64, true),
-        Field::new("max_u64", DataType::UInt64, true),
-        Field::new("min_f64", DataType::Float64, true),
-        Field::new("max_f64", DataType::Float64, true),
-        Field::new("sum_text", DataType::Utf8, true),
-        Field::new("sum_valid", DataType::Boolean, false),
-        Field::new("has_infinity", DataType::Boolean, false),
-    ]))
-}
-
-fn value_class_name(class: ValueClass) -> &'static str {
-    match class {
-        ValueClass::Opaque => "opaque",
-        ValueClass::Signed => "signed",
-        ValueClass::Unsigned => "unsigned",
-        ValueClass::Float => "float",
-    }
-}
-
-fn signed_bounds(column: &ColumnAnalytics) -> (Option<i64>, Option<i64>) {
-    if column.descriptor.value_class == ValueClass::Signed && column.global.has_bounds() {
-        (
-            Some(i64::from_le_bytes(column.global.min_bits.to_le_bytes())),
-            Some(i64::from_le_bytes(column.global.max_bits.to_le_bytes())),
-        )
-    } else {
-        (None, None)
-    }
-}
-
-fn unsigned_bounds(column: &ColumnAnalytics) -> (Option<u64>, Option<u64>) {
-    if column.descriptor.value_class == ValueClass::Unsigned && column.global.has_bounds() {
-        (Some(column.global.min_bits), Some(column.global.max_bits))
-    } else {
-        (None, None)
-    }
-}
-
-fn float_bounds(column: &ColumnAnalytics) -> (Option<f64>, Option<f64>) {
-    if column.descriptor.value_class == ValueClass::Float && column.global.has_bounds() {
-        (
-            Some(f64::from_bits(column.global.min_bits)),
-            Some(f64::from_bits(column.global.max_bits)),
-        )
-    } else {
-        (None, None)
-    }
-}
-
-fn stat_sum_text(column: &ColumnAnalytics) -> Result<Option<String>> {
-    let stat = &column.global;
-    if !stat.sum_valid() {
-        return Ok(None);
-    }
-    match column.descriptor.value_class {
-        ValueClass::Opaque => Ok(None),
-        ValueClass::Signed => Ok(Some(i128::from_le_bytes(stat.sum).to_string())),
-        ValueClass::Unsigned => Ok(Some(u128::from_le_bytes(stat.sum).to_string())),
-        ValueClass::Float => {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&stat.sum[..8]);
-            let value = f64::from_le_bytes(bytes);
-            if value.is_finite() {
-                Ok(Some(value.to_string()))
-            } else {
-                Err(Error::Format(format!(
-                    "property {:?} has a non-finite sum marked valid",
-                    column.name
-                )))
-            }
-        }
     }
 }

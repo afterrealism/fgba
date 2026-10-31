@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { after, afterEach, before, beforeEach, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { FgbaDataset, initializeFgbaWasm } from "../js/client.js";
+import { FgbaDataset, FgbaWorkerClient, initializeFgbaWasm } from "../js/client.js";
 import { createSignedObjectStore } from "../js/object-store.js";
 
 const WORLD = [-180, -85.0511, 180, 85.0511];
@@ -521,4 +521,56 @@ test("invalid responses are cancelled before unbounded body consumption", async 
     longStore.get({ key: "cities_12.a.fgb", rangeHeader: "bytes=0-0" }),
     (error) => error.name === "ShortRead",
   );
+});
+
+test("bounded SQL uses exact counts, A5 sources, and read-only validation", async () => {
+  const dataset = await open();
+  const count = await dataset.querySql({ sql: "SELECT COUNT(*) AS exact_rows FROM features", limits: {} });
+  assert.deepEqual(count, { columns: ["exact_rows"], rows: [["12"]], truncated: false });
+
+  const band = await dataset.querySql({ sql: "SELECT SUM(count) AS total FROM a5_band_2", limits: {} });
+  assert.deepEqual(band.rows, [["12"]]);
+  const viewport = await dataset.querySql({
+    sql: "SELECT COUNT(*) AS cells, SUM(count) AS estimated FROM a5_viewport_approx",
+    bbox: [-10, 40, 10, 60],
+    res: 2,
+    limits: {},
+  });
+  assert.deepEqual(viewport.rows, [["1", "8"]]);
+  await assert.rejects(
+    dataset.querySql({ sql: "DELETE FROM features", limits: {} }),
+    /only one SELECT|read-only|DML/i,
+  );
+  assert.ok(requests.every((request) => request.range));
+  assert.ok(requests.every((request) => request.range !== `bytes=0-${fixture.length - 1}`));
+});
+
+test("SQL watchdog terminates and recreates a runaway worker", async () => {
+  const workers = [];
+  const client = new FgbaWorkerClient({
+    sqlTimeoutMs: 5,
+    workerFactory: () => {
+      const worker = {
+        messages: [],
+        terminated: false,
+        onmessage: null,
+        onerror: null,
+        postMessage(message) { this.messages.push(message); },
+        terminate() { this.terminated = true; },
+      };
+      workers.push(worker);
+      return worker;
+    },
+  });
+  const query = client.querySql({ sql: "SELECT COUNT(*) FROM features", limits: {} });
+  await assert.rejects(query, (error) => error.name === "QueryTimeout");
+  assert.equal(workers.length, 2);
+  assert.equal(workers[0].terminated, true);
+
+  const bands = client.bands();
+  const message = workers[1].messages[0];
+  workers[1].onmessage({ data: { id: message.id, ok: true, value: [] } });
+  assert.deepEqual(await bands, []);
+  client.close();
+  assert.equal(workers[1].terminated, true);
 });
