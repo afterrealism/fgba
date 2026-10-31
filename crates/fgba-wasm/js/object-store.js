@@ -115,28 +115,30 @@ async function readBoundedBody(response, expectedLength) {
   }
 }
 
-function signingMetadata(value, expectedGeneration, onGenerationChange) {
-  if (!value || typeof value.url !== "string" || value.url.length === 0) {
-    throw objectError("SigningFailed", "Signing response did not include an object URL");
+function signingMetadata(value, requestedKey, expectedGeneration, onGenerationChange) {
+  if (!value || !Array.isArray(value.objects) || value.objects.length !== 1) {
+    throw objectError("SigningFailed", "Signing response must contain exactly one object");
   }
-  const returnedGeneration = String(value.generation ?? expectedGeneration);
+  const [signedObject] = value.objects;
+  if (signedObject.path !== requestedKey || typeof signedObject.url !== "string" || signedObject.url.length === 0) {
+    throw objectError("SigningFailed", "Signing response object does not match the requested path");
+  }
+  if (value.generation === undefined || value.generation === null) {
+    throw objectError("SigningFailed", "Signing response did not include a generation");
+  }
+  const returnedGeneration = String(value.generation);
   if (returnedGeneration !== expectedGeneration) {
     onGenerationChange(returnedGeneration);
     throw objectError("GenerationChanged", "Object generation changed; cached dataset state was discarded");
   }
   const now = Date.now();
-  let expiresAt;
-  if (value.expiresAt !== undefined) {
-    expiresAt = typeof value.expiresAt === "number" ? value.expiresAt : Date.parse(value.expiresAt);
-  } else if (value.expiresIn !== undefined) {
-    expiresAt = now + Number(value.expiresIn) * 1000;
-  }
+  const expiresAt = typeof value.expires_at === "number" ? value.expires_at : Date.parse(value.expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= now) {
     throw objectError("SigningFailed", "Signing response has an invalid expiry");
   }
   const ttl = expiresAt - now;
   const skew = Math.min(60_000, ttl * 0.2);
-  return { url: value.url, refreshAt: expiresAt - skew, generation: returnedGeneration };
+  return { url: signedObject.url, refreshAt: expiresAt - skew, generation: returnedGeneration };
 }
 
 /**
@@ -187,7 +189,7 @@ export function createSignedObjectStore({
           const response = await fetchImpl(signEndpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ key, generation: expectedGeneration }),
+            body: JSON.stringify({ paths: [key] }),
             credentials: "omit",
             redirect: "error",
             cache: "no-store",
@@ -202,7 +204,7 @@ export function createSignedObjectStore({
         if (error?.code === "SigningFailed" || error?.name === "AbortError") throw error;
         throw objectError("SigningFailed", "Could not refresh object authorization");
       }
-      const next = signingMetadata(metadata, expectedGeneration, invalidate);
+      const next = signingMetadata(metadata, key, expectedGeneration, invalidate);
       signed = next;
       return next;
     })();

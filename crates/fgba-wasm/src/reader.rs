@@ -8,7 +8,7 @@ use geozero::geojson::GeoJsonWriter;
 use geozero::{FeatureAccess, FeatureProcessor};
 use serde_json::{json, Value};
 use std::error::Error as StdError;
-use std::io::{Error as IoError, Read, Seek, SeekFrom};
+use std::io::{Cursor, Error as IoError, Read, Seek, SeekFrom};
 use wasm_bindgen::prelude::*;
 
 /// Hard upper bound for exact feature output.
@@ -80,22 +80,96 @@ fn parse_bbox(bbox: Vec<f64>) -> Result<[f64; 4], JsValue> {
     Ok(values)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SelectedFeature {
+    offset: u64,
+    len: u64,
+}
+
+/// A forward-only FlatGeobuf stream containing the original header followed by
+/// only the R-tree-selected features. `select_all` skips the index with one
+/// `SeekFrom::Current`; that single seek is a no-op because this stream has no
+/// index. It avoids FlatGeobuf 6.0.1's default-node-size-only `select_bbox`.
+struct SelectedFeatureStream {
+    header: Cursor<Vec<u8>>,
+    source: SparseRange,
+    features: Vec<SelectedFeature>,
+    next_feature: usize,
+    current: Option<(u64, u64)>,
+    position: u64,
+    ignore_index_skip: bool,
+}
+
+impl Read for SelectedFeatureStream {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        if self.header.position() < self.header.get_ref().len() as u64 {
+            let count = self.header.read(buffer)?;
+            self.position += count as u64;
+            return Ok(count);
+        }
+        if self.current.is_none() {
+            let Some(feature) = self.features.get(self.next_feature).copied() else {
+                return Ok(0);
+            };
+            self.source.seek(SeekFrom::Start(feature.offset))?;
+            self.current = Some((feature.offset, feature.len));
+            self.next_feature += 1;
+        }
+        let Some((_, remaining)) = self.current else {
+            return Ok(0);
+        };
+        let wanted = buffer
+            .len()
+            .min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        let count = self.source.read(&mut buffer[..wanted])?;
+        if count == 0 {
+            return Err(IoError::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "selected FlatGeobuf feature is truncated",
+            ));
+        }
+        self.position += count as u64;
+        let remaining = remaining - count as u64;
+        self.current = (remaining > 0).then_some((0, remaining));
+        Ok(count)
+    }
+}
+
+impl Seek for SelectedFeatureStream {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        match position {
+            SeekFrom::Current(0) => Ok(self.position),
+            SeekFrom::Current(_) if self.ignore_index_skip => {
+                self.ignore_index_skip = false;
+                Ok(self.position)
+            }
+            _ => Err(IoError::new(
+                std::io::ErrorKind::Unsupported,
+                "selected FlatGeobuf stream is forward-only",
+            )),
+        }
+    }
+}
+
 fn prefetch_selected_features(
     source: &mut SparseRange,
     bbox: [f64; 4],
     limit: u32,
     body_len: u64,
-) -> Result<(), JsValue> {
+) -> Result<SelectedFeatureStream, JsValue> {
     let fgb = FgbReader::open(&mut *source)
         .map_err(|error| dataset_error("open FlatGeobuf body", error))?;
     let header = fgb.header();
     let feature_count = header.features_count();
     let index_node_size = header.index_node_size();
     if feature_count == 0 || index_node_size == 0 {
-        source
-            .seek(SeekFrom::Start(0))
-            .map_err(|error| dataset_error("rewind FlatGeobuf body", error))?;
-        return Ok(());
+        return Err(dataset_error(
+            "select FlatGeobuf features",
+            flatgeobuf::Error::NoIndex,
+        ));
     }
     let feature_count = usize::try_from(feature_count)
         .map_err(|_| JsValue::from_str("FlatGeobuf feature count does not fit this platform"))?;
@@ -107,18 +181,24 @@ fn prefetch_selected_features(
     let data_start = index_start
         .checked_add(index_size)
         .ok_or_else(|| JsValue::from_str("FlatGeobuf feature offset overflows"))?;
-    let initial_prefix_end = data_start
-        .checked_add(4)
-        .ok_or_else(|| JsValue::from_str("FlatGeobuf feature prefix offset overflows"))?;
-    if initial_prefix_end > body_len {
+    if data_start > body_len {
         return Err(JsValue::from_str(
             "FlatGeobuf header and index extend beyond the body",
         ));
     }
+
+    let header_len = usize::try_from(index_start)
+        .map_err(|_| JsValue::from_str("FlatGeobuf header does not fit this platform"))?;
+    let mut header_bytes = vec![0_u8; header_len];
+    let mut header_source = source.clone();
+    header_source
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| header_source.read_exact(&mut header_bytes))
+        .map_err(|error| dataset_error("cache FlatGeobuf header", error))?;
     let hits = PackedRTree::stream_search(
         &mut *source,
         feature_count,
-        PackedRTree::DEFAULT_NODE_SIZE,
+        index_node_size,
         bbox[0],
         bbox[1],
         bbox[2],
@@ -126,16 +206,8 @@ fn prefetch_selected_features(
     )
     .map_err(|error| dataset_error("search FlatGeobuf index", error))?;
 
-    // FeatureIter::new and FeatureIter::advance treat a failed feature-length
-    // prefix read as EOF. Preflight the initial prefix and every selected span
-    // so a sparse WouldBlock can never be mistaken for an empty result.
-    source
-        .seek(SeekFrom::Start(data_start))
-        .map_err(|error| dataset_error("seek to initial FlatGeobuf feature prefix", error))?;
+    let mut features = Vec::with_capacity(hits.len().min(limit as usize));
     let mut prefix = [0_u8; 4];
-    source
-        .read_exact(&mut prefix)
-        .map_err(|error| dataset_error("read initial FlatGeobuf feature prefix", error))?;
     for hit in hits.iter().take(limit as usize) {
         let feature_offset = data_start
             .checked_add(hit.offset as u64)
@@ -163,11 +235,20 @@ fn prefetch_selected_features(
         if copied != feature_size {
             return Err(JsValue::from_str("FlatGeobuf feature is truncated"));
         }
+        features.push(SelectedFeature {
+            offset: feature_offset,
+            len: 4 + feature_size,
+        });
     }
-    source
-        .seek(SeekFrom::Start(0))
-        .map_err(|error| dataset_error("rewind FlatGeobuf body", error))?;
-    Ok(())
+    Ok(SelectedFeatureStream {
+        header: Cursor::new(header_bytes),
+        source: source.clone(),
+        features,
+        next_feature: 0,
+        current: None,
+        position: 0,
+        ignore_index_skip: true,
+    })
 }
 
 /// Synchronous WASM half of the async JS `FgbaDataset` wrapper. Every method
@@ -318,12 +399,12 @@ impl SparseDataset {
         let body = reader
             .body()
             .map_err(|error| dataset_error("seek to FlatGeobuf body", error))?;
-        prefetch_selected_features(body, bbox, limit, body_len)?;
-        let fgb =
-            FgbReader::open(body).map_err(|error| dataset_error("open FlatGeobuf body", error))?;
+        let stream = prefetch_selected_features(body, bbox, limit, body_len)?;
+        let fgb = FgbReader::open(stream)
+            .map_err(|error| dataset_error("open selected FlatGeobuf features", error))?;
         let mut selected = fgb
-            .select_bbox(bbox[0], bbox[1], bbox[2], bbox[3])
-            .map_err(|error| dataset_error("select FlatGeobuf features", error))?;
+            .select_all()
+            .map_err(|error| dataset_error("read selected FlatGeobuf features", error))?;
 
         let mut bytes = Vec::new();
         {

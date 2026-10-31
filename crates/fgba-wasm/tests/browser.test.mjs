@@ -8,6 +8,139 @@ import { createSignedObjectStore } from "../js/object-store.js";
 
 const WORLD = [-180, -85.0511, 180, 85.0511];
 const fixture = await readFile(new URL("../../../testdata/cities_12.a.fgb", import.meta.url));
+
+function rtreeLayout(count, nodeSize) {
+  const sizes = [count];
+  let total = count;
+  let n = count;
+  while (n > 1) {
+    n = Math.ceil(n / nodeSize);
+    sizes.push(n);
+    total += n;
+  }
+  const starts = [];
+  n = total;
+  for (const size of sizes) {
+    starts.push(n - size);
+    n -= size;
+  }
+  return { sizes, starts, total, leafStart: starts[0] };
+}
+
+function readNode(bytes, offset) {
+  return {
+    minX: bytes.readDoubleLE(offset),
+    minY: bytes.readDoubleLE(offset + 8),
+    maxX: bytes.readDoubleLE(offset + 16),
+    maxY: bytes.readDoubleLE(offset + 24),
+    offset: bytes.readBigUInt64LE(offset + 32),
+  };
+}
+
+function writeNode(bytes, offset, node) {
+  bytes.writeDoubleLE(node.minX, offset);
+  bytes.writeDoubleLE(node.minY, offset + 8);
+  bytes.writeDoubleLE(node.maxX, offset + 16);
+  bytes.writeDoubleLE(node.maxY, offset + 24);
+  bytes.writeBigUInt64LE(node.offset, offset + 32);
+}
+
+function parentNode(children, offset) {
+  return {
+    minX: Math.min(...children.map((node) => node.minX)),
+    minY: Math.min(...children.map((node) => node.minY)),
+    maxX: Math.max(...children.map((node) => node.maxX)),
+    maxY: Math.max(...children.map((node) => node.maxY)),
+    offset: BigInt(offset),
+  };
+}
+
+function crc32(bytes) {
+  let crc = ~0;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return ~crc >>> 0;
+}
+
+function makeNodeSizeFixture(nodeSize, featureGap = 0) {
+  assert.notEqual(nodeSize, 16);
+  const source = Buffer.from(fixture);
+  const headerSize = source.readUInt32LE(8);
+  const indexStart = 12 + headerSize;
+  const root = 12 + source.readUInt32LE(12);
+  const vtable = root - source.readInt32LE(root);
+  const countOffset = source.readUInt16LE(vtable + 20);
+  const featureCount = Number(source.readBigUInt64LE(root + countOffset));
+  const oldLayout = rtreeLayout(featureCount, 16);
+  const oldIndexSize = oldLayout.total * 40;
+  const dataStart = indexStart + oldIndexSize;
+  const footerStart = source.length - 32;
+  const oldDirectoryOffset = Number(source.readBigUInt64LE(footerStart + 8));
+  const oldBandOffset = Number(source.readBigUInt64LE(oldDirectoryOffset + 6));
+  const bodyEnd = oldBandOffset - 4;
+  const features = [];
+  let featurePosition = dataStart;
+  for (let index = 0; index < featureCount; index += 1) {
+    const size = source.readUInt32LE(featurePosition) + 4;
+    features.push(Buffer.from(source.subarray(featurePosition, featurePosition + size)));
+    featurePosition += size;
+  }
+  assert.equal(featurePosition, bodyEnd);
+  const featureData = Buffer.alloc(bodyEnd - dataStart + featureGap * (featureCount - 1));
+  let featureOffset = 0;
+  const featureOffsets = features.map((feature) => {
+    const offset = featureOffset;
+    feature.copy(featureData, featureOffset);
+    featureOffset += feature.length + featureGap;
+    return offset;
+  });
+  const leaves = Array.from({ length: featureCount }, (_, index) => {
+    const leaf = readNode(source, indexStart + (oldLayout.leafStart + index) * 40);
+    leaf.offset = BigInt(featureOffsets[index]);
+    return leaf;
+  });
+  const layout = rtreeLayout(featureCount, nodeSize);
+  const nodes = new Array(layout.total);
+  for (let index = 0; index < featureCount; index += 1) nodes[layout.leafStart + index] = leaves[index];
+  for (let level = 0; level < layout.sizes.length - 1; level += 1) {
+    const childrenStart = layout.starts[level];
+    const parentStart = layout.starts[level + 1];
+    for (let parent = 0; parent < layout.sizes[level + 1]; parent += 1) {
+      const first = parent * nodeSize;
+      const end = Math.min(first + nodeSize, layout.sizes[level]);
+      const children = nodes.slice(childrenStart + first, childrenStart + end);
+      nodes[parentStart + parent] = parentNode(children, childrenStart + first);
+    }
+  }
+  const index = Buffer.alloc(layout.total * 40);
+  nodes.forEach((node, position) => writeNode(index, position * 40, node));
+
+  assert.equal(source.readUInt16LE(vtable + 22), 0, "node-size field must be absent in the default fixture");
+  assert.deepEqual(source.subarray(root + 4, root + 6), Buffer.alloc(2), "header padding must be free");
+  source.writeUInt16LE(4, vtable + 22);
+  source.writeUInt16LE(nodeSize, root + 4);
+
+  const directory = Buffer.from(source.subarray(oldDirectoryOffset, footerStart));
+  const footer = Buffer.from(source.subarray(footerStart));
+  const delta = index.length - oldIndexSize + featureData.length - (bodyEnd - dataStart);
+  assert.equal(directory[0], 1);
+  assert.equal(directory[1], 1);
+  directory.writeBigUInt64LE(directory.readBigUInt64LE(6) + BigInt(delta), 6);
+  footer.writeBigUInt64LE(BigInt(oldDirectoryOffset + delta), 8);
+  footer.writeUInt32LE(crc32(directory), 24);
+  return Buffer.concat([
+    source.subarray(0, indexStart),
+    index,
+    featureData,
+    source.subarray(bodyEnd, oldDirectoryOffset),
+    directory,
+    footer,
+  ]);
+}
+
+const node4Fixture = makeNodeSizeFixture(4, 5000);
 let objectServer;
 let signServer;
 let objectOrigin;
@@ -37,8 +170,8 @@ function cors(response) {
   response.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length");
 }
 
-function sendPartial(response, start, end, mode) {
-  let body = fixture.subarray(start, end + 1);
+function sendPartial(response, start, end, mode, source = fixture) {
+  let body = source.subarray(start, end + 1);
   let contentStart = start;
   let contentEnd = end;
   if (mode === "short") body = body.subarray(0, -1);
@@ -47,7 +180,7 @@ function sendPartial(response, start, end, mode) {
     contentEnd += 1;
   }
   response.statusCode = 206;
-  response.setHeader("Content-Range", `bytes ${contentStart}-${contentEnd}/${fixture.length}`);
+  response.setHeader("Content-Range", `bytes ${contentStart}-${contentEnd}/${source.length}`);
   response.setHeader("Content-Length", String(body.length));
   response.end(body);
 }
@@ -58,6 +191,7 @@ before(async () => {
     const url = new URL(request.url, "http://object.invalid");
     const range = request.headers.range || null;
     const mode = url.pathname.slice(1).replace(/\.fgb$/, "");
+    const source = mode === "cities-node4.a" ? node4Fixture : fixture;
     requests.push({ path: url.pathname, range, token: url.searchParams.get("token") });
     if (url.pathname.includes("pmtiles")) {
       response.statusCode = 500;
@@ -92,8 +226,8 @@ before(async () => {
     }
     if (mode === "full-object") {
       response.statusCode = 200;
-      response.setHeader("Content-Length", String(fixture.length));
-      response.end(fixture);
+      response.setHeader("Content-Length", String(source.length));
+      response.end(source);
       return;
     }
     const match = /^bytes=(\d+)-(\d+)$/.exec(range);
@@ -104,35 +238,42 @@ before(async () => {
     }
     const start = Number(match[1]);
     const end = Number(match[2]);
-    if (end >= fixture.length) {
+    if (end >= source.length) {
       response.statusCode = 416;
-      response.setHeader("Content-Range", `bytes */${fixture.length}`);
+      response.setHeader("Content-Range", `bytes */${source.length}`);
       response.end();
       return;
     }
-    sendPartial(response, start, end, mode);
+    sendPartial(response, start, end, mode, source);
   });
   objectOrigin = `http://127.0.0.1:${await listen(objectServer)}`;
 
   signServer = createServer(async (request, response) => {
     cors(response);
-    if (request.method !== "POST" || request.url !== "/sign") {
+    const route = /^\/api\/layers\/([^/]+)\/sign$/.exec(request.url || "");
+    if (request.method !== "POST" || !route) {
       response.statusCode = 404;
       response.end();
       return;
     }
     let body = "";
     for await (const chunk of request) body += chunk;
-    const { key, generation: requestedGeneration } = JSON.parse(body);
+    const { paths } = JSON.parse(body);
+    if (!Array.isArray(paths) || paths.length !== 1 || typeof paths[0] !== "string") {
+      response.statusCode = 400;
+      response.end("expected one relative path");
+      return;
+    }
+    const [key] = paths;
     token += 1;
     const issuedToken = key === "auth.fgb" ? `auth-${++authToken}` : `token-${token}`;
-    signingRequests.push({ key, generation: requestedGeneration });
+    signingRequests.push({ key, paths, layerKey: decodeURIComponent(route[1]) });
     response.statusCode = 200;
     response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify({
-      url: `${objectOrigin}/${key}?token=${issuedToken}`,
-      expiresAt: Date.now() + 300_000,
       generation,
+      expires_at: new Date(Date.now() + 300_000).toISOString(),
+      objects: [{ path: key, url: `${objectOrigin}/${key}?token=${issuedToken}` }],
     }));
   });
   signOrigin = `http://127.0.0.1:${await listen(signServer)}`;
@@ -159,7 +300,7 @@ afterEach(() => {
 async function open(key = "cities_12.a.fgb", options = {}) {
   const dataset = await FgbaDataset.open({
     key,
-    signEndpoint: `${signOrigin}/sign`,
+    signEndpoint: `${signOrigin}/api/layers/${encodeURIComponent(key)}/sign`,
     generation: "g1",
     ...options,
   });
@@ -200,7 +341,17 @@ test("sparse open, A5 GeoJSON, and exact cities use only explicit 206 ranges", a
   assert.equal(limited.features.length, 3);
   assert.ok(requests.every((request) => request.range));
   assert.ok(requests.every((request) => !request.path.includes("pmtiles")));
-  assert.ok(signingRequests.every((request) => request.generation === "g1"));
+  assert.ok(signingRequests.every((request) => request.paths.length === 1 && request.paths[0] === "cities_12.a.fgb"));
+  assert.ok(signingRequests.every((request) => request.layerKey === "cities_12.a.fgb"));
+});
+
+test("a non-default FlatGeobuf index node size returns every exact city", async () => {
+  const expectedDataset = await open();
+  const expected = await expectedDataset.queryFeatures({ bbox: WORLD, limit: 50_000 });
+  const dataset = await open("cities-node4.a.fgb");
+  const cities = await dataset.queryFeatures({ bbox: WORLD, limit: 50_000 });
+  assert.equal(cities.features.length, 12);
+  assert.deepEqual(cities, expected);
 });
 
 test("404 is distinct from a transport failure and neither refreshes authorization", async () => {
@@ -265,9 +416,12 @@ test("signing refreshes proactively inside the TTL skew and requests stay capped
     signEndpoint: async () => {
       signs += 1;
       return {
-        url: `${objectOrigin}/cities_12.a.fgb?token=short-${signs}`,
-        expiresAt: Date.now() + 40,
         generation: "g1",
+        expires_at: Date.now() + 40,
+        objects: [{
+          path: "cities_12.a.fgb",
+          url: `${objectOrigin}/cities_12.a.fgb?token=short-${signs}`,
+        }],
       };
     },
   });
@@ -299,9 +453,9 @@ test("invalid responses are cancelled before unbounded body consumption", async 
     key: "cities_12.a.fgb",
     generation: "g1",
     signEndpoint: async () => ({
-      url: "https://object.invalid/cities_12.a.fgb",
-      expiresAt: Date.now() + 10_000,
       generation: "g1",
+      expires_at: Date.now() + 10_000,
+      objects: [{ path: "cities_12.a.fgb", url: "https://object.invalid/cities_12.a.fgb" }],
     }),
     fetchImpl: async () => fullResponse,
   });
@@ -325,9 +479,9 @@ test("invalid responses are cancelled before unbounded body consumption", async 
     key: "cities_12.a.fgb",
     generation: "g1",
     signEndpoint: async () => ({
-      url: "https://object.invalid/cities_12.a.fgb",
-      expiresAt: Date.now() + 10_000,
       generation: "g1",
+      expires_at: Date.now() + 10_000,
+      objects: [{ path: "cities_12.a.fgb", url: "https://object.invalid/cities_12.a.fgb" }],
     }),
     fetchImpl: async () => longResponse,
   });
