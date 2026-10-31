@@ -15,6 +15,10 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --target wasm32-unknown-unknown -p fgba
+      - run: cargo clippy -p fgba-wasm --target wasm32-unknown-unknown --locked -- -D warnings
+      - run: npx --yes wasm-pack@0.15.1 build crates/fgba-wasm --target web --release -- --locked
+      - run: npx --yes wasm-pack@0.15.1 test --headless --chrome crates/fgba-wasm --locked
+      - run: node --test crates/fgba-wasm/tests/browser.test.mjs
   msrv:
     runs-on: ubuntu-latest
     steps:
