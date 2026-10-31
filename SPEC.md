@@ -510,13 +510,20 @@ runs), binary-search records by cell ID.
    means the host does not do range requests; fail with a message naming
    range support (S3, R2, nginx, and most static hosts qualify).
 2. Read the footer and directory once per session; cache them.
-3. Fetch each needed band once, whole, when its size is below the reader's
-   band cap (RECOMMENDED default 8 MiB — measured 1.4 MiB per million
+3. Fetch each needed band when required, whole when its size is below the
+   reader's band cap (RECOMMENDED default 8 MiB — measured 1.4 MiB per million
    features at the deepest band); above the cap, binary-search the remote
-   records. Cache bands per session.
+   records. Cache policy belongs to the reader, not the format.
 
-Measured (loopback HTTP, 1M-feature file): 3 requests to open, 1 request per
-new band, **0 requests per viewport once the band is cached**.
+The reference native `Reader::query`/`stats` retains one most-recently-used
+band: repeated same-resolution viewports cost no additional band request and
+changing resolution evicts the previous entry. `read_band(res)` always performs
+a fresh decode. Browser clients may instead use a separately bounded sparse or
+multi-band cache; no multi-band or cross-session cache is implied by FGBA.
+
+Measured (loopback HTTP, 1M-feature file, reference native reader): 3 requests
+to open, 1 request per newly selected band, **0 requests per viewport while the
+same band remains cached**.
 
 Cross-origin browser reads need CORS: the `Range` header triggers a preflight;
 hosts SHOULD cache `OPTIONS` responses (see flatgeobuf.org's CDN notes).
@@ -526,6 +533,19 @@ hosts SHOULD cache `OPTIONS` responses (see flatgeobuf.org's CDN notes).
 Readers without blocking I/O SHOULD use a two-phase loop: compute the byte
 ranges needed (footer, directory, band slice), fetch them asynchronously,
 then decode. Chunk caching makes warm views free.
+
+The reference `fgba-wasm` crate implements this pattern with a sparse range
+cache, strict 200/206 validation, A5/GeoJSON rendering, and bounded eager
+`fgba-sql`/DataFusion execution over in-memory RecordBatches. It first probes
+`bytes=0-0` to learn the size and then requests an explicit final-32-byte
+footer span, so it does not depend on suffix-range Fetch behavior. Its 8 MiB
+range, 64 MiB sparse-cache, and SQL source/result limits are implementation
+limits, not changes to the binary format. See `docs/tilify-integration.md` for
+the actual artifact and current support boundary.
+
+`crates/fgba/examples/wasm/main.js` is an older manual pure-JavaScript parser
+demo. It illustrates the read pattern but is not the standalone Rust/WASM
+artifact and provides no SQL runtime.
 
 ### 9.4 The ladder and the switch (rendering guidance)
 

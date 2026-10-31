@@ -18,8 +18,11 @@ fgba_sql::query_csv(
 
 - `features`: exact body rows with typed properties, nullable `geom_wkb`, and
   nullable numeric `bbox_xmin`, `bbox_ymin`, `bbox_xmax`, `bbox_ymax`. Bbox
-  predicates mean bbox intersection, not exact geometry intersection. There
-  are no `ST_*` operators or CRS-aware geometry engine.
+  predicates mean bbox intersection, not exact geometry intersection. Planar
+  `st_length`, `st_area`, and `st_npoints(Binary)` UDFs operate on supported WKB
+  without CRS transformation; stored `geom_length`, `geom_area`, and
+  `geom_npoints` columns expose kind-3 metrics when available. There is no
+  CRS-aware geometry engine.
 - `a5_band_<res>`: integral `cell_id`/`count` records from each available A5
   band. Counts are exact for bbox-midpoint-attributed cells, not regional
   geometry-intersection counts.
@@ -49,6 +52,14 @@ working memory, and one oversized value can exceed a batch's byte target.
 
 SQL is constrained with DataFusion `SQLOptions`: DDL, DML, and session
 statements are disabled; read-only queries and `EXPLAIN` remain available.
+
+For the standalone browser artifact, `EagerSession` registers bounded
+one-partition in-memory RecordBatches and executes the same DataFusion engine
+and geometry UDFs through direct async streams. `fgba-wasm` adds a conservative
+source allowlist, physical-plan gate, hard source/result caps, and a worker
+watchdog. That path is bounded eager materialization, not the native streaming
+path and not an unbounded lazy/remote SQL service. See
+[`docs/tilify-integration.md`](https://github.com/afterrealism/fgba/blob/main/docs/tilify-integration.md).
 
 Only the narrowly matched `Projection → Aggregate(count(1)) → TableScan`
 logical plan, optionally with a literal limit or canonical bbox filter, uses

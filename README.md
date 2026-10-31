@@ -25,7 +25,7 @@ cargo install fgba-cli
 fgba convert buildings.geojson -o buildings.a.fgb    # or .csv / .shp / .fgb
 fgba info buildings.a.fgb
 fgba query buildings.a.fgb "SELECT COUNT(*) FROM features"
-fgba serve buildings.a.fgb                           # range-capable local server + viewer
+fgba serve buildings.a.fgb                           # loopback static GET/HEAD + ranges only
 ```
 
 ```rust
@@ -70,7 +70,29 @@ Measured on the reference machine (1M features): conversion ≈ 4 s, trailer ≈
 
 ## WebAssembly
 
-The core crate builds for `wasm32-unknown-unknown`. In the browser, fetch byte ranges asynchronously (`fetch` + `Range` header), feed them to `fgba::SliceReader`, decode — two phases, no blocking. See [`crates/fgba/examples/wasm/`](crates/fgba/examples/wasm/) for a dependency-free two-phase browser demo. `fgba-sql` also compiles for this target and exposes `EagerSession` for read-only SQL over one-partition in-memory batches without DuckDB or another external engine.
+The standalone browser artifact is `crates/fgba-wasm`: Rust/WASM plus a worker
+and JavaScript client for sparse signed ranges, A5/GeoJSON visualization, and
+bounded local `fgba-sql`/DataFusion SQL. Build the actual package with:
+
+```sh
+npx --yes wasm-pack@0.15.1 build crates/fgba-wasm --target web --release -- --locked
+```
+
+The browser reader uses an 8 MiB range cap and 64 MiB sparse cache. Tilify's
+control plane signs only the registry-selected FGBA generation; the browser
+refreshes before expiry with `min(60s,20% of TTL)` skew, retries one 401/403,
+and discards state if the generation changes. Object storage must allow the
+exact web origins, GET + Range, and expose Content-Range/Length and
+Accept-Ranges. Dataset bytes never pass through an app tile/query/proxy route.
+SQL is bounded eager materialization (256 MiB encoded / 512 MiB decoded / 1,000,000
+source rows; at most 1,000 rows / 8 MiB JSON) with a 30-second worker watchdog.
+It is not unbounded lazy SQL, DuckDB-WASM, or a server query endpoint.
+
+The older [`crates/fgba/examples/wasm/`](crates/fgba/examples/wasm/) canvas
+example is a manual **pure-JavaScript** parser demo, not this standalone WASM
+artifact. See the [Tilify integration guide](docs/tilify-integration.md) for
+native-versus-browser roles, exact build/test commands, signed URL expiry and
+CORS requirements, the SQL support matrix, and all limits.
 
 ## Versioning
 

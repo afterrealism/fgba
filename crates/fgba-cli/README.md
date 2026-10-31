@@ -12,7 +12,7 @@ fgba query buildings.a.fgb "SELECT COUNT(*) FROM features"
 fgba info buildings.a.fgb                           # header, bands, trailer summary
 fgba stats buildings.a.fgb --bbox -11,35,31,71     # viewport covering estimate
 fgba verify buildings.a.fgb                         # trailer integrity checks
-fgba serve buildings.a.fgb                          # range-capable local server + viewer
+fgba serve buildings.a.fgb                          # loopback static GET/HEAD + ranges only
 fgba bench buildings.a.fgb                          # local vs range-request timings
 ```
 

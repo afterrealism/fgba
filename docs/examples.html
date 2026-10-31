@@ -73,7 +73,13 @@ footer, the 25-byte directory, and the 44-byte band — then the world-view
 query reuses the cached band
 (<a href="spec.html#http">SPEC §9.2</a>).</p>
 
-<h2 id="wasm">wasm — two-phase streaming in the browser<a class="self" href="#wasm" aria-label="link to this section">§</a></h2>
+<h2 id="wasm">manual pure-JavaScript demo — two-phase streaming<a class="self" href="#wasm" aria-label="link to this section">§</a></h2>
+
+<p><strong>This is not the standalone WASM artifact.</strong> The actual
+Rust/WASM visualization and SQL package is <code>crates/fgba-wasm</code>; see
+<a href="https://github.com/afterrealism/fgba/blob/main/docs/tilify-integration.md">the Tilify integration guide</a>.
+The canvas example below is a manual parser demonstration, not an automated
+browser/WASM acceptance suite.</p>
 
 <p><a href="https://github.com/afterrealism/fgba/tree/main/crates/fgba/examples/wasm"><code>crates/fgba/examples/wasm/</code></a>
 is a dependency-free canvas demo of the two-phase read pattern

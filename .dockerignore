@@ -4,6 +4,7 @@ example/data
 data
 .impeccable
 bench/format-bench/target
+crates/fgba-wasm/pkg
 xtask-target
 paper
 **/__pycache__

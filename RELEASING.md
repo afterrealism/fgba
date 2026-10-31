@@ -1,7 +1,10 @@
 # Releasing FGBA
 
-Owner-run steps to publish v0.1.0. Everything up to step 4 is already done at
-HEAD; these steps require the owner's GitHub and crates.io credentials.
+Owner-run steps to publish v0.1.0. Run the complete native, actual-WASM, and
+browser checks in the [integration guide](docs/tilify-integration.md#local-verification)
+before release; these publish steps require the owner's GitHub and crates.io
+credentials. The standalone `fgba-wasm` browser package is built from source
+with wasm-pack and is not an additional registry release step.
 
 Prerequisites: Rust 1.91.0 or newer (the workspace MSRV), `gh` CLI authenticated
 (`gh auth login`), a crates.io account with publish rights, and a clean working
@@ -30,21 +33,28 @@ The `pages.yml` workflow then deploys `docs/` on every push to `main`.
 cargo login   # paste an API token from https://crates.io/me
 ```
 
-## 4. Publish the crates — library first
+## 4. Publish the crates — dependency order
 
-`fgba-cli` depends on `fgba = "0.1.0"`, so **fgba must be published and visible
-in the index before fgba-cli can package** (cargo resolves the dependency
-against crates.io during `cargo publish`; wait a minute for index propagation
-between the two commands).
+`fgba-sql` depends on `fgba = "0.1.0"`, and `fgba-cli` depends on both
+`fgba = "0.1.0"` and `fgba-sql = "0.1.0"`. Publish in exactly this order and
+wait for each dependency to be visible in the crates.io index before packaging
+the next crate:
+
+1. `fgba`
+2. `fgba-sql`
+3. `fgba-cli`
 
 ```sh
 cargo publish -p fgba
+cargo info fgba@0.1.0       # retry until the new core is visible
+cargo publish -p fgba-sql
+cargo info fgba-sql@0.1.0   # retry until the new SQL crate is visible
 cargo publish -p fgba-cli
 ```
 
-Both manifests were verified with `cargo publish --dry-run` / packaged-source
-compile+test runs before tagging; the dry-run of `fgba-cli` only passes once
-`fgba 0.1.0` exists in the index.
+Run `cargo publish --dry-run` and packaged-source compile+test checks before
+tagging. The SQL and CLI dry-runs require their newly published dependencies to
+be available in the index.
 
 ## 5. Tag the release
 
@@ -56,7 +66,8 @@ git tag v0.1.0 && git push --tags
 
 - **docs.rs**: <https://docs.rs/fgba> builds (the `http` feature is enabled via
   `[package.metadata.docs.rs]`, so `HttpRangeReader` appears in the docs).
-- **crates.io**: <https://crates.io/crates/fgba> and
+- **crates.io**: <https://crates.io/crates/fgba>,
+  <https://crates.io/crates/fgba-sql>, and
   <https://crates.io/crates/fgba-cli> show the README, description,
   keywords/categories, and the Apache-2.0 OR MIT license.
 - **Install and smoke-test the CLI from crates.io**:

@@ -1,4 +1,6 @@
 /target
+/bench/**/target/
+/crates/fgba-wasm/pkg/
 xtask-target
 testdata/large/
 /example/data/*.fgb

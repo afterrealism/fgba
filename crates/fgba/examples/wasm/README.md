@@ -1,4 +1,9 @@
-# FGBA wasm demo — two-phase aggregate streaming in the browser
+# Manual pure-JavaScript FGBA browser demo
+
+> **Not the standalone WASM artifact.** This historical example implements a
+> small parser in JavaScript. The actual Rust/WASM visualization and SQL package
+> is `crates/fgba-wasm`; see `docs/tilify-integration.md`. The checklist below
+> is a manual demo, not an automated browser/WASM acceptance suite.
 
 A minimal, dependency-free-**parsing** browser demo of the FGBA two-phase read
 pattern (SPEC §9.3), proving that aggregate cells stream off plain static
@@ -23,7 +28,7 @@ implementation. Narrow viewports use the ordinary single-covering path.
 `main.js`; only the A5 grid math is imported. There is no build step and no
 map library.
 
-## Run it
+## Manual demo checklist
 
 The page and the data must share an origin (the `Range` header triggers a CORS
 preflight otherwise, SPEC §9.2). From the repository root:

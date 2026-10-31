@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Normative test vector (`tests/data/cities_12.a.fgb`) covering SPEC Appendix A.
 - **`fgba-cli` crate** (`fgba` binary): `convert` (GeoJSON/CSV/TSV/Shapefile/
   FlatGeobuf → `.a.fgb`), `build`, `query`, `info`, `stats`, `verify`,
-  `serve` (range-capable local server + viewer), `bench`.
+  `serve` (loopback static GET/HEAD with byte ranges), `bench`.
   - Conversion preserves properties with deterministic schema/order,
     nullability, and lossless numeric widening.
   - `build`/`convert --analytics` emits kind-2 analytics and, by default,
@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Minimal `EagerSession` execution over one-partition in-memory batches,
     with read-only SQL options and direct async DataFusion streams. The crate
     compiles for `wasm32-unknown-unknown` without DuckDB or another SQL engine.
+- **`fgba-wasm` standalone browser artifact**: sparse signed-range FGBA reads,
+  A5 and exact GeoJSON visualization, proactive same-generation URL refresh,
+  and bounded local DataFusion SQL over Arrow RecordBatches. Includes strict
+  200/206/CORS handling, 8 MiB ranges, a 64 MiB sparse cache, source/result
+  budgets, and a 30-second SQL worker watchdog. The older pure-JavaScript
+  canvas demo remains a separate manual example.
 - **Range Lab** (`example/`): local vector uploads with analytics/chunk controls,
   automatic FGBA conversion into an uploads bucket, map preview, and read-only
   SQL results. Wide browser band queries split and deduplicate covering panels

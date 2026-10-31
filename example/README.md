@@ -78,7 +78,7 @@ target/debug/fgba info --url http://127.0.0.1:8090/s3/india-buildings/india-buil
 
 This is intentionally a tiny local S3-style workspace, not a complete S3 API: there is no authentication, XML API, production hardening, or cloud deployment. Uploads and conversion are local-only; SQL remains read-only.
 
-The browser parser is reused from `crates/fgba/examples/wasm/main.js`. Pinned local assets are `a5-js@1.0.0`, `deck.gl@9.4.0`, and `flatgeobuf@4.6.1`, with their licenses in `vendor/`. Relevant API references: [deck.gl Controller](https://deck.gl/docs/api-reference/core/controller), [SolidPolygonLayer](https://deck.gl/docs/api-reference/layers/solid-polygon-layer), [GeoJsonLayer](https://deck.gl/docs/api-reference/layers/geojson-layer), [WebMercatorViewport](https://deck.gl/docs/api-reference/core/web-mercator-viewport), and [FlatGeobuf's GeoJSON API](https://unpkg.com/flatgeobuf@4.6.1/lib/mjs/geojson.d.ts).
+The browser parser is reused from `crates/fgba/examples/wasm/main.js`. It is a pure-JavaScript demo parser, not the standalone `fgba-wasm` artifact; the `/api/query` and other routes above are Range Lab demo contracts, not Tilify's direct-browser API. Pinned local assets are `a5-js@1.0.0`, `deck.gl@9.4.0`, and `flatgeobuf@4.6.1`, with their licenses in `vendor/`. Relevant API references: [deck.gl Controller](https://deck.gl/docs/api-reference/core/controller), [SolidPolygonLayer](https://deck.gl/docs/api-reference/layers/solid-polygon-layer), [GeoJsonLayer](https://deck.gl/docs/api-reference/layers/geojson-layer), [WebMercatorViewport](https://deck.gl/docs/api-reference/core/web-mercator-viewport), and [FlatGeobuf's GeoJSON API](https://unpkg.com/flatgeobuf@4.6.1/lib/mjs/geojson.d.ts).
 
 ## Check
 
