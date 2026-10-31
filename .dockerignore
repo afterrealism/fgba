@@ -1,0 +1,9 @@
+.git
+target
+example/data
+data
+.impeccable
+bench/format-bench/target
+xtask-target
+paper
+**/__pycache__
