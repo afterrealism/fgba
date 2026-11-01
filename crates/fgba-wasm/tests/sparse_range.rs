@@ -97,6 +97,20 @@ fn miss_preserves_position_and_reports_exact_span() -> TestResult {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+fn miss_does_not_refetch_the_cached_prefix() -> TestResult {
+    let mut sparse = SparseRange::new(2048, 32, 128)?;
+    sparse.insert(0, &[1])?;
+    sparse.seek(SeekFrom::Start(1))?;
+    let mut bytes = [0; 8];
+    expect_miss_value(sparse.read(&mut bytes), WouldBlock { offset: 1, len: 8 })?;
+    sparse.insert(1, &[2; 8])?;
+    sparse.read_exact(&mut bytes)?;
+    assert_eq!(bytes, [2; 8]);
+    Ok(())
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn lru_evicts_bytes_not_only_entries() -> TestResult {
     let mut sparse = SparseRange::new(4096, 16, 32)?;
     sparse.insert(0, &[1; 16])?;
@@ -144,13 +158,16 @@ fn coalesces_only_small_gaps_within_the_range_cap() -> TestResult {
     expect_miss_value(
         sparse.read(&mut bytes),
         WouldBlock {
-            offset: 100,
-            len: 12,
+            offset: 108,
+            len: 4,
         },
     )?;
 
-    sparse.insert(100, &[2; 12])?;
+    sparse.insert(104, &[2; 8])?;
     sparse.seek(SeekFrom::Start(104))?;
+    sparse.read_exact(&mut bytes)?;
+    assert_eq!(bytes, [2; 4]);
+    sparse.seek(SeekFrom::Start(108))?;
     sparse.read_exact(&mut bytes)?;
     assert_eq!(bytes, [2; 4]);
 
@@ -159,8 +176,8 @@ fn coalesces_only_small_gaps_within_the_range_cap() -> TestResult {
     expect_miss_value(
         sparse.read(&mut bytes),
         WouldBlock {
-            offset: 1000,
-            len: 12,
+            offset: 1008,
+            len: 4,
         },
     )?;
 

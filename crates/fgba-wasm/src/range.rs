@@ -234,7 +234,7 @@ impl SparseRange {
                 if !nearby {
                     continue;
                 }
-                let candidate_start = start.min(cached_start);
+                let candidate_start = start.min(cached_start).max(self.position);
                 let candidate_end = end.max(cached_end);
                 if candidate_end - candidate_start > self.max_range_bytes as u64 {
                     continue;

@@ -9,7 +9,7 @@ use geozero::geojson::GeoJsonWriter;
 use geozero::{FeatureAccess, FeatureProcessor};
 use serde_json::{json, Value};
 use std::error::Error as StdError;
-use std::io::{Cursor, Error as IoError, Read, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Error as IoError, Read, Seek, SeekFrom};
 use wasm_bindgen::prelude::*;
 
 /// Hard upper bound for exact feature output.
@@ -161,7 +161,8 @@ fn prefetch_selected_features(
     limit: u32,
     body_len: u64,
 ) -> Result<SelectedFeatureStream, JsValue> {
-    let fgb = FgbReader::open(&mut *source)
+    let mut source = BufReader::with_capacity(1024 * 1024, source.clone());
+    let fgb = FgbReader::open(&mut source)
         .map_err(|error| dataset_error("open FlatGeobuf body", error))?;
     let header = fgb.header();
     let feature_count = header.features_count();
@@ -191,13 +192,15 @@ fn prefetch_selected_features(
     let header_len = usize::try_from(index_start)
         .map_err(|_| JsValue::from_str("FlatGeobuf header does not fit this platform"))?;
     let mut header_bytes = vec![0_u8; header_len];
-    let mut header_source = source.clone();
-    header_source
+    source
         .seek(SeekFrom::Start(0))
-        .and_then(|_| header_source.read_exact(&mut header_bytes))
+        .and_then(|_| source.read_exact(&mut header_bytes))
         .map_err(|error| dataset_error("cache FlatGeobuf header", error))?;
+    source
+        .seek(SeekFrom::Start(index_start))
+        .map_err(|error| dataset_error("locate FlatGeobuf index", error))?;
     let hits = PackedRTree::stream_search(
-        &mut *source,
+        &mut source,
         feature_count,
         index_node_size,
         bbox[0],
@@ -209,15 +212,31 @@ fn prefetch_selected_features(
 
     let mut features = Vec::with_capacity(hits.len().min(limit as usize));
     let mut prefix = [0_u8; 4];
+    let mut body = source;
+    body.seek(SeekFrom::Start(data_start))
+        .map_err(|error| dataset_error("seek to FlatGeobuf feature data", error))?;
+    let mut position = data_start;
     for hit in hits.iter().take(limit as usize) {
         let feature_offset = data_start
             .checked_add(hit.offset as u64)
             .ok_or_else(|| JsValue::from_str("FlatGeobuf feature offset overflows"))?;
-        source
-            .seek(SeekFrom::Start(feature_offset))
-            .map_err(|error| dataset_error("seek to selected FlatGeobuf feature", error))?;
-        source
-            .read_exact(&mut prefix)
+        if feature_offset < position {
+            return Err(JsValue::from_str(
+                "FlatGeobuf selected feature offsets are not ordered",
+            ));
+        }
+        let gap = feature_offset - position;
+        if gap > 1024 * 1024 {
+            body.seek(SeekFrom::Start(feature_offset))
+                .map_err(|error| dataset_error("skip unselected FlatGeobuf features", error))?;
+        } else if gap > 0 {
+            let skipped = std::io::copy(&mut (&mut body).take(gap), &mut std::io::sink())
+                .map_err(|error| dataset_error("skip unselected FlatGeobuf features", error))?;
+            if skipped != gap {
+                return Err(JsValue::from_str("FlatGeobuf feature gap is truncated"));
+            }
+        }
+        body.read_exact(&mut prefix)
             .map_err(|error| dataset_error("read selected FlatGeobuf feature prefix", error))?;
         let feature_size = u64::from(u32::from_le_bytes(prefix));
         let payload_start = feature_offset
@@ -231,19 +250,21 @@ fn prefetch_selected_features(
                 "FlatGeobuf feature extends beyond the body",
             ));
         }
-        let copied = std::io::copy(&mut (&mut *source).take(feature_size), &mut std::io::sink())
+        let copied = std::io::copy(&mut (&mut body).take(feature_size), &mut std::io::sink())
             .map_err(|error| dataset_error("cache selected FlatGeobuf feature", error))?;
         if copied != feature_size {
             return Err(JsValue::from_str("FlatGeobuf feature is truncated"));
         }
+        position = feature_end;
         features.push(SelectedFeature {
             offset: feature_offset,
             len: 4 + feature_size,
         });
     }
+    let source = body.into_inner();
     Ok(SelectedFeatureStream {
         header: Cursor::new(header_bytes),
-        source: source.clone(),
+        source,
         features,
         next_feature: 0,
         current: None,

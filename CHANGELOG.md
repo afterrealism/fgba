@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sparse body recovery now preserves I/O misses and counts length-delimited
   FlatGeobuf features through a bounded 1 MiB buffer. Browser WASM no longer
   turns a cache miss into a false zero-row EOF or issues one request per feature.
+- Exact-feature reads buffer the R-tree and feature prefetch together, while
+  range coalescing no longer refetches cached prefixes. Large layers stay within
+  the 128-request operation cap instead of failing on valid feature bodies.
 
 ### Added
 

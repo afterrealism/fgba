@@ -8,6 +8,7 @@ import { createSignedObjectStore } from "../js/object-store.js";
 
 const WORLD = [-180, -85.0511, 180, 85.0511];
 const fixture = await readFile(new URL("../../../testdata/cities_12.a.fgb", import.meta.url));
+const manyFixture = await readFile(new URL("../../../testdata/many_300.a.fgb", import.meta.url));
 
 function rtreeLayout(count, nodeSize) {
   const sizes = [count];
@@ -213,7 +214,8 @@ before(async () => {
     const range = request.headers.range || null;
     const mode = url.pathname.slice(1).replace(/\.fgb$/, "");
     const source = mode === "cities-node4.a" ? node4Fixture
-      : mode === "cities-recovery.a" ? bodyRecoveryFixture : fixture;
+      : mode === "cities-recovery.a" ? bodyRecoveryFixture
+      : mode === "many_300.a" ? manyFixture : fixture;
     requests.push({ path: url.pathname, range, token: url.searchParams.get("token") });
     if (url.pathname.includes("pmtiles")) {
       response.statusCode = 500;
@@ -379,6 +381,17 @@ test("small ranges preserve body recovery retries within the request cap", async
   }
   const cities = await dataset.queryFeatures({ bbox: WORLD, limit: 50_000 });
   assert.equal(cities.features.length, 12);
+});
+
+test("many exact features stay within the request cap with small ranges", async () => {
+  const dataset = await open("many_300.a.fgb", { maxRangeBytes: 1024 });
+  const features = await dataset.queryFeatures({ bbox: WORLD, limit: 50_000 });
+  assert.equal(features.features.length, 300);
+  for (const request of requests) {
+    const match = /^bytes=(\d+)-(\d+)$/.exec(request.range || "");
+    assert.ok(match, "every fetch must be an explicit range");
+    assert.ok(Number(match[2]) - Number(match[1]) + 1 <= 1024);
+  }
 });
 
 test("a non-default FlatGeobuf index node size returns every exact city", async () => {
