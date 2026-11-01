@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - Unreleased
 
+### Fixed
+
+- Sparse body recovery now preserves I/O misses and counts length-delimited
+  FlatGeobuf features through a bounded 1 MiB buffer. Browser WASM no longer
+  turns a cache miss into a false zero-row EOF or issues one request per feature.
+
 ### Added
 
 - **`fgba` library crate**: reader and writer for FGBA (FlatGeobuf Aggregates) —

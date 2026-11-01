@@ -19,8 +19,8 @@ use crate::io::SharedReader;
 #[cfg(feature = "analytics")]
 use crate::{ArrowChunk, BodyAnalytics, GeometryMetrics};
 use flatgeobuf::packed_r_tree::{NodeItem, PackedRTree};
-use flatgeobuf::{FallibleStreamingIterator, FgbReader};
-use std::io::{Read, Seek, SeekFrom};
+use flatgeobuf::FgbReader;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 
 /// Public metadata of one aggregate band section, from the directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -680,6 +680,15 @@ fn optional_body_len_matches<R: Read + Seek>(inner: &mut R, candidate: u64) -> R
     Ok(terminal == candidate)
 }
 
+/// Preserve sparse-reader I/O errors so async callers can supply the missing
+/// range and retry; only actual FlatGeobuf format failures become Format.
+fn recover_body_error(context: &str, error: flatgeobuf::Error) -> Error {
+    match error {
+        flatgeobuf::Error::IO(io_error) => Error::Io(io_error),
+        other => Error::Format(format!("{context}: {other}")),
+    }
+}
+
 /// Recover the exact Data-section terminal from FlatGeobuf's own feature
 /// iteration. The directory boundary and sentinel are independent checks;
 /// neither a section offset nor a guessed feature length supplies `body_len`.
@@ -687,7 +696,7 @@ fn recover_body_len<R: Read + Seek>(inner: &mut R, dir_offset: u64) -> Result<u6
     inner.seek(SeekFrom::Start(0))?;
     let shared = SharedReader::new(&mut *inner);
     let fgb = FgbReader::open(shared.handle())
-        .map_err(|error| Error::Format(format!("cannot recover FlatGeobuf body: {error}")))?;
+        .map_err(|error| recover_body_error("cannot recover FlatGeobuf body", error))?;
     let (expected_rows, index_node_size) = {
         let header = fgb.header();
         (header.features_count(), header.index_node_size())
@@ -697,26 +706,39 @@ fn recover_body_len<R: Read + Seek>(inner: &mut R, dir_offset: u64) -> Result<u6
             "cannot recover FlatGeobuf body without a feature count and spatial index".to_string(),
         ));
     }
-    let mut features = fgb
-        .select_all()
-        .map_err(|error| Error::Format(format!("cannot iterate FlatGeobuf body: {error}")))?;
-    let mut rows = 0u64;
-    while features
-        .next()
-        .map_err(|error| Error::Format(format!("cannot read FlatGeobuf body feature: {error}")))?
-        .is_some()
-    {
-        rows = rows
-            .checked_add(1)
-            .ok_or_else(|| Error::Format("FlatGeobuf body row count overflows".to_string()))?;
+    let rows = usize::try_from(expected_rows)
+        .map_err(|_| Error::Format("FlatGeobuf body row count does not fit usize".to_string()))?;
+    let index_size = u64::try_from(PackedRTree::index_size(rows, index_node_size))
+        .map_err(|_| Error::Format("FlatGeobuf body index size overflows u64".to_string()))?;
+    drop(fgb);
+
+    // FlatGeobuf's FeatureIter treats every prefix-read error as EOF. That is
+    // incorrect for a sparse source: WouldBlock must reach the async caller so
+    // it can supply the range and retry. Count length-delimited features
+    // directly instead of allowing a cache miss to become a false zero-row EOF.
+    let mut body = BufReader::with_capacity(1024 * 1024, shared.handle());
+    body.seek(SeekFrom::Current(i64::try_from(index_size).map_err(
+        |_| Error::Format("FlatGeobuf body index size exceeds i64".to_string()),
+    )?))?;
+    let mut body_len = shared.position();
+    for row in 0..expected_rows {
+        let mut prefix = [0_u8; 4];
+        body.read_exact(&mut prefix)?;
+        let feature_len = u64::from(u32::from_le_bytes(prefix));
+        let skipped = std::io::copy(&mut (&mut body).take(feature_len), &mut std::io::sink())?;
+        if skipped != feature_len {
+            return Err(Error::Format(format!(
+                "FlatGeobuf body feature {row} is truncated: {skipped} of {feature_len} bytes"
+            )));
+        }
+        body_len = body_len
+            .checked_add(4)
+            .and_then(|position| position.checked_add(feature_len))
+            .ok_or_else(|| {
+                Error::Format("FlatGeobuf body terminal offset overflows".to_string())
+            })?;
     }
-    drop(features);
-    if rows != expected_rows {
-        return Err(Error::Format(format!(
-            "FlatGeobuf body yielded {rows} rows, expected {expected_rows}"
-        )));
-    }
-    let body_len = shared.position();
+    drop(body);
     drop(shared);
 
     let sentinel_end = body_len

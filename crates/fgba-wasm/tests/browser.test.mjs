@@ -140,7 +140,28 @@ function makeNodeSizeFixture(nodeSize, featureGap = 0) {
   ]);
 }
 
+function makeBodyRecoveryFixture() {
+  const source = Buffer.from(fixture);
+  const footerStart = source.length - 32;
+  const directoryOffset = Number(source.readBigUInt64LE(footerStart + 8));
+  const directory = Buffer.from(source.subarray(directoryOffset, footerStart));
+  const footer = Buffer.from(source.subarray(footerStart));
+  assert.equal(directory[0], 1);
+  assert.equal(directory[1], 1);
+  const bandOffset = directory.readBigUInt64LE(6);
+  const optional = Buffer.alloc(22);
+  optional.writeUInt16LE(2, 0); // body analytics with an invalid in-body offset
+  optional.writeBigUInt64LE(bandOffset - 1n, 6);
+  optional.writeBigUInt64LE(1n, 14);
+  directory[1] = 2;
+  const recoveredDirectory = Buffer.concat([directory, optional]);
+  footer.writeBigUInt64LE(BigInt(recoveredDirectory.length), 16);
+  footer.writeUInt32LE(crc32(recoveredDirectory), 24);
+  return Buffer.concat([source.subarray(0, directoryOffset), recoveredDirectory, footer]);
+}
+
 const node4Fixture = makeNodeSizeFixture(4, 5000);
+const bodyRecoveryFixture = makeBodyRecoveryFixture();
 let objectServer;
 let signServer;
 let objectOrigin;
@@ -191,7 +212,8 @@ before(async () => {
     const url = new URL(request.url, "http://object.invalid");
     const range = request.headers.range || null;
     const mode = url.pathname.slice(1).replace(/\.fgb$/, "");
-    const source = mode === "cities-node4.a" ? node4Fixture : fixture;
+    const source = mode === "cities-node4.a" ? node4Fixture
+      : mode === "cities-recovery.a" ? bodyRecoveryFixture : fixture;
     requests.push({ path: url.pathname, range, token: url.searchParams.get("token") });
     if (url.pathname.includes("pmtiles")) {
       response.statusCode = 500;
@@ -343,6 +365,20 @@ test("sparse open, A5 GeoJSON, and exact cities use only explicit 206 ranges", a
   assert.ok(requests.every((request) => !request.path.includes("pmtiles")));
   assert.ok(signingRequests.every((request) => request.paths.length === 1 && request.paths[0] === "cities_12.a.fgb"));
   assert.ok(signingRequests.every((request) => request.layerKey === "cities_12.a.fgb"));
+});
+
+test("small ranges preserve body recovery retries within the request cap", async () => {
+  const dataset = await open("cities-recovery.a.fgb", { maxRangeBytes: 256 });
+  assert.ok(dataset.bands().length > 0);
+  assert.ok(requests.length > 4, "the fixture must exercise repeated body misses");
+  assert.ok(requests.length <= 128);
+  for (const request of requests) {
+    const match = /^bytes=(\d+)-(\d+)$/.exec(request.range || "");
+    assert.ok(match, "every fetch must be an explicit range");
+    assert.ok(Number(match[2]) - Number(match[1]) + 1 <= 256);
+  }
+  const cities = await dataset.queryFeatures({ bbox: WORLD, limit: 50_000 });
+  assert.equal(cities.features.length, 12);
 });
 
 test("a non-default FlatGeobuf index node size returns every exact city", async () => {
